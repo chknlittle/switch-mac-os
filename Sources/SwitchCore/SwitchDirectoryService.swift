@@ -89,18 +89,10 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     private func refreshDispatchers() {
-        let disco = xmpp.disco()
         let node = nodes.dispatchers
-        disco.getItems(for: JID(directoryBareJid), node: node) { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                switch result {
-                case .success(let items):
-                    self.dispatchers = items.items.map { DirectoryItem(jid: $0.jid.bareJid.stringValue, name: $0.name) }
-                    self.ensureSubscribed(to: node)
-                case .failure:
-                    self.dispatchers = []
-                }
+        ensureSubscribed(to: node) { [weak self] in
+            self?.queryItems(node: node) { items in
+                self?.dispatchers = items
             }
         }
     }
@@ -126,63 +118,60 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     private func refreshGroups(dispatcherJid: String) {
-        let disco = xmpp.disco()
         let node = nodes.groups(dispatcherJid)
-        disco.getItems(for: JID(directoryBareJid), node: node) { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                switch result {
-                case .success(let items):
-                    self.groups = items.items.map { DirectoryItem(jid: $0.jid.bareJid.stringValue, name: $0.name) }
-                    self.ensureSubscribed(to: node)
-                case .failure:
-                    self.groups = []
-                }
+        ensureSubscribed(to: node) { [weak self] in
+            self?.queryItems(node: node) { items in
+                self?.groups = items
             }
         }
     }
 
     private func refreshIndividuals(groupJid: String) {
-        let disco = xmpp.disco()
         let node = nodes.individuals(groupJid)
-        disco.getItems(for: JID(directoryBareJid), node: node) { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                switch result {
-                case .success(let items):
-                    self.individuals = items.items.map { DirectoryItem(jid: $0.jid.bareJid.stringValue, name: $0.name) }
-                    self.ensureSubscribed(to: node)
-                case .failure:
-                    self.individuals = []
-                }
+        ensureSubscribed(to: node) { [weak self] in
+            self?.queryItems(node: node) { items in
+                self?.individuals = items
             }
         }
     }
 
     private func refreshSubagents(individualJid: String) {
-        let disco = xmpp.disco()
         let node = nodes.subagents(individualJid)
-        disco.getItems(for: JID(directoryBareJid), node: node) { [weak self] result in
+        ensureSubscribed(to: node) { [weak self] in
+            self?.queryItems(node: node) { items in
+                self?.subagents = items
+            }
+        }
+    }
+
+    private func queryItems(node: String, assign: @escaping @MainActor ([DirectoryItem]) -> Void) {
+        let disco = xmpp.disco()
+        disco.getItems(for: JID(directoryBareJid), node: node) { result in
             Task { @MainActor in
-                guard let self else { return }
                 switch result {
                 case .success(let items):
-                    self.subagents = items.items.map { DirectoryItem(jid: $0.jid.bareJid.stringValue, name: $0.name) }
-                    self.ensureSubscribed(to: node)
+                    assign(items.items.map { DirectoryItem(jid: $0.jid.bareJid.stringValue, name: $0.name) })
                 case .failure:
-                    self.subagents = []
+                    assign([])
                 }
             }
         }
     }
 
-    private func ensureSubscribed(to node: String) {
-        guard !subscribedNodes.contains(node) else { return }
+    private func ensureSubscribed(to node: String, then completion: @escaping @MainActor () -> Void) {
+        guard !subscribedNodes.contains(node) else {
+            completion()
+            return
+        }
 
         let subscriber = xmpp.client.boundJid ?? JID(xmpp.client.userBareJid)
         let service = pubSubBareJid ?? directoryBareJid
-        xmpp.pubsub().subscribe(at: service, to: node, subscriber: subscriber, completionHandler: nil)
-        subscribedNodes.insert(node)
+        xmpp.pubsub().subscribe(at: service, to: node, subscriber: subscriber, with: nil as JabberDataElement?, completionHandler: { [weak self] _ in
+            Task { @MainActor in
+                self?.subscribedNodes.insert(node)
+                completion()
+            }
+        })
     }
 
     private func bindSelectionPipeline() {

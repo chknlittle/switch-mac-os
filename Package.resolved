@@ -1,0 +1,23 @@
+{
+  "pins" : [
+    {
+      "identity" : "martin",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tigase/Martin.git",
+      "state" : {
+        "revision" : "1d70e9e7eb51a7faa500832be6400a39f86083f7",
+        "version" : "3.2.4"
+      }
+    },
+    {
+      "identity" : "tigase-logging.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tigase/tigase-logging.swift",
+      "state" : {
+        "revision" : "382e2e85e64f8b1e3fcb71a996a030bf1b62ecb3",
+        "version" : "1.0.0"
+      }
+    }
+  ],
+  "version" : 2
+}

@@ -1,6 +1,18 @@
 import Combine
 import Foundation
 import Martin
+import os
+
+private let logger = Logger(subsystem: "com.switch.macos", category: "XMPPService")
+
+class DebugStreamLogger: StreamLogger {
+    func incoming(_ value: StreamEvent) {
+        logger.error("XMPP <<< \(String(describing: value), privacy: .public)")
+    }
+    func outgoing(_ value: StreamEvent) {
+        logger.error("XMPP >>> \(String(describing: value), privacy: .public)")
+    }
+}
 
 @MainActor
 public final class XMPPService: ObservableObject {
@@ -13,6 +25,7 @@ public final class XMPPService: ObservableObject {
 
     public let chatStore = ChatStore()
     public let client = XMPPClient()
+    private let debugLogger = DebugStreamLogger()
 
     @Published public private(set) var status: Status = .disconnected
     @Published public private(set) var statusText: String = "Disconnected"
@@ -31,6 +44,9 @@ public final class XMPPService: ObservableObject {
     }
 
     public func connect(using config: AppConfig) {
+        client.streamLogger = debugLogger
+        logger.info("Connecting to \(config.xmppHost, privacy: .public):\(config.xmppPort) as \(config.xmppJid, privacy: .public)")
+        logger.info("Password length: \(config.xmppPassword.count), first 4 chars: \(String(config.xmppPassword.prefix(4)), privacy: .public)...")
         configureClient(using: config)
         status = .connecting
         statusText = "Connecting..."
@@ -102,7 +118,6 @@ public final class XMPPService: ObservableObject {
         client.modulesManager.register(DiscoveryModule())
         client.modulesManager.register(SoftwareVersionModule())
         client.modulesManager.register(PingModule())
-        client.modulesManager.register(RosterModule())
         client.modulesManager.register(PresenceModule())
         client.modulesManager.register(messageModule)
         client.modulesManager.register(pubSubModule)
@@ -120,6 +135,7 @@ public final class XMPPService: ObservableObject {
                     self.status = .connecting
                     self.statusText = "Connecting..."
                 } else if case .disconnected(let reason) = state {
+                    logger.error("Disconnected: \(String(describing: reason), privacy: .public)")
                     self.status = .disconnected
                     self.statusText = "Disconnected (\(String(describing: reason)))"
                 } else {

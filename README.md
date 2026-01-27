@@ -47,6 +47,23 @@ A custom macOS XMPP client built with SwiftUI using the **Tigase Martin** librar
 - Copy `.env.example` to `.env` and fill in credentials.
 - On macOS: open `Package.swift` in Xcode and Run the `SwitchMacOS` executable.
 
+### Running from the command line
+
+The app reads `.env` from the process's current working directory, so launch from the repo root:
+
+```bash
+swift build
+.build/debug/SwitchMacOS
+```
+
+You can also pass env vars inline:
+
+```bash
+XMPP_HOST="..." XMPP_JID="..." XMPP_PASSWORD="..." SWITCH_DIRECTORY_JID="..." .build/debug/SwitchMacOS
+```
+
+**Note:** Values in `.env` take precedence over environment variables passed on the command line.
+
 ## Directory Service (Implemented: Option 1)
 
 This client expects Switch to provide the hierarchy using:
