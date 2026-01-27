@@ -11,7 +11,7 @@ A custom iOS XMPP client built with Swift using the **Tigase Martin** library. F
 | Column | Content | Behavior |
 |--------|---------|----------|
 | **1 (Left)** | Dispatchers | Selecting filters Column 2 + opens dispatcher chat |
-| **2** | Groups (MUC Rooms) | Selecting filters Column 3 + opens group MUC chat |
+| **2** | Groups (MUC Rooms) | Selecting filters Column 3 (no chat switch) |
 | **3** | Individual Sessions | Selecting filters Column 4 + opens 1:1 chat |
 | **4 (Right)** | Subagents | Selecting opens subagent chat |
 
@@ -29,8 +29,8 @@ A custom iOS XMPP client built with Swift using the **Tigase Martin** library. F
 - **Always visible** on the right side of the sidebar
 - Shows **welcome/empty state** when nothing is selected (subtle design)
 - Displays **1:1 chat** when an individual or subagent is selected
-- Displays **MUC room** when a group is selected
 - Displays **1:1 chat** when a dispatcher is selected
+- Does **not** switch the chat when a group is selected (group selection is navigation/filtering)
 
 ## Technical Stack
 
@@ -71,6 +71,29 @@ Filter individuals to group's members
 Individual selected
     ↓
 Show individual's subagents + open chat
+
+## How We Model The 4-Column Hierarchy In XMPP
+
+Presence/status text is good for online state, but it's not a reliable place to encode durable classification (dispatcher vs session vs subagent) or parent/child relationships.
+
+Decision: use standard discovery + subscriptions, with the Switch service as the source of truth.
+
+- **Directory service (required)**: Switch runs an XMPP service/component that supports:
+  - XEP-0030 (Service Discovery) to list items for each level
+  - XEP-0060 (PubSub) to push realtime updates when the lists change
+  - The service returns structured lists:
+    - dispatchers
+    - groups for a dispatcher
+    - individuals for a group
+    - subagents for an individual
+- **Client behavior**: the client renders columns from directory results; it uses standard message/presence/roster for chat + online indicators.
+
+## Subagent Final Response Behavior
+
+Subagents are treated like normal XMPP contacts for chat/presence. The key behavioral difference is that a subagent's work output must be delivered back to the agent/contact that spawned it.
+
+- Work messages include a task id and parent reference (e.g. `task_id`, `parent_jid`).
+- The subagent sends the final response to `parent_jid` (and optionally also to the currently active chat, depending on UX).
 ```
 
 ## UI States
