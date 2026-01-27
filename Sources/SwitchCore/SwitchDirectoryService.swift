@@ -13,6 +13,7 @@ public final class SwitchDirectoryService: ObservableObject {
     @Published public private(set) var chatTarget: ChatTarget? = nil
 
     private let xmpp: XMPPService
+    private let directoryJid: JID
     private let directoryBareJid: BareJID
     private let pubSubBareJid: BareJID?
     private let nodes: SwitchDirectoryNodes
@@ -27,8 +28,13 @@ public final class SwitchDirectoryService: ObservableObject {
         nodes: SwitchDirectoryNodes = SwitchDirectoryNodes()
     ) {
         self.xmpp = xmpp
+        // IMPORTANT: ejabberd answers disco#items for bare user JIDs itself (PEP).
+        // We must address the directory bot via a full JID resource so the IQ
+        // reaches the connected client.
+        self.directoryJid = JID(directoryJid)
         self.directoryBareJid = BareJID(directoryJid)
-        self.pubSubBareJid = pubSubJid.flatMap { BareJID($0) }
+        // PubSub service is often a domain JID (e.g. pubsub.example.com).
+        self.pubSubBareJid = pubSubJid.map { JID($0).bareJid }
         self.nodes = nodes
         bindSelectionPipeline()
         bindPubSubRefresh()
@@ -146,7 +152,7 @@ public final class SwitchDirectoryService: ObservableObject {
 
     private func queryItems(node: String, assign: @escaping @MainActor ([DirectoryItem]) -> Void) {
         let disco = xmpp.disco()
-        disco.getItems(for: JID(directoryBareJid), node: node) { result in
+        disco.getItems(for: directoryJid, node: node) { result in
             Task { @MainActor in
                 switch result {
                 case .success(let items):

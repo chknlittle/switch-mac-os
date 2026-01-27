@@ -34,7 +34,12 @@ public struct AppConfig: Sendable {
         let password = try EnvLoader.require(env, key: "XMPP_PASSWORD")
 
         let directory = env["SWITCH_DIRECTORY_JID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let directoryJid = (directory?.isEmpty == false) ? directory : nil
+        var directoryJid = (directory?.isEmpty == false) ? directory : nil
+        // Mirror server behavior: if the caller provides a bare JID, add a stable
+        // resource so disco#items reaches the connected client (not ejabberd PEP).
+        if let d = directoryJid, !d.contains("/") {
+            directoryJid = d + "/directory"
+        }
 
         let pubsub = env["SWITCH_PUBSUB_JID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let pubsubJid = (pubsub?.isEmpty == false) ? pubsub : nil

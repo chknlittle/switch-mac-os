@@ -68,7 +68,8 @@ XMPP_HOST="..." XMPP_JID="..." XMPP_PASSWORD="..." SWITCH_DIRECTORY_JID="..." .b
 
 This client expects Switch to provide the hierarchy using:
 
-- **XEP-0030 disco#items** served by a Switch "directory" XMPP account (example: `switch-dir@domain`).
+- **XEP-0030 disco#items** served by a Switch "directory" XMPP account.
+  - IMPORTANT: on ejabberd, disco for *bare* user JIDs is handled by the server (PEP), so the directory must be addressed as a *full* JID resource, e.g. `switch-dir@domain/directory`.
 - **XEP-0060 pubsub notifications** sent via ejabberd `mod_pubsub` (usually `pubsub.domain`).
 
 The pubsub payload is treated as a lightweight "refresh ping"; the client refreshes lists by re-running disco queries.
