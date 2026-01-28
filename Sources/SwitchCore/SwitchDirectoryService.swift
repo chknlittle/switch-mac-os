@@ -182,11 +182,9 @@ public final class SwitchDirectoryService: ObservableObject {
                     }
                     remaining -= 1
                     if remaining == 0 {
-                        let merged = Array(aggregate.values).sorted {
-                            if $0.name == $1.name { return $0.jid < $1.jid }
-                            return $0.name < $1.name
-                        }
+                        let merged = self.sortByRecency(Array(aggregate.values))
                         self.individuals = merged
+                        self.loadHistoryForAllSessions()
                         self.autoSelectNewSessionIfNeeded()
                     }
                 }
@@ -201,7 +199,8 @@ public final class SwitchDirectoryService: ObservableObject {
                 guard let self else { return }
                 guard self.individualsRefreshToken == token else { return }
                 guard self.selectedDispatcherJid == dispatcherJid else { return }
-                self.individuals = items
+                self.individuals = self.sortByRecency(items)
+                self.loadHistoryForAllSessions()
                 self.autoSelectNewSessionIfNeeded()
             }
         }
@@ -249,5 +248,33 @@ public final class SwitchDirectoryService: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // Re-sort sessions when new messages arrive
+        xmpp.chatStore.$threads
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.resortIndividualsByRecency()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func resortIndividualsByRecency() {
+        guard !individuals.isEmpty else { return }
+        individuals = sortByRecency(individuals)
+    }
+
+    private func loadHistoryForAllSessions() {
+        for item in individuals {
+            xmpp.ensureHistoryLoaded(with: item.jid)
+        }
+    }
+
+    private func sortByRecency(_ items: [DirectoryItem]) -> [DirectoryItem] {
+        let chatStore = xmpp.chatStore
+        return items.sorted { a, b in
+            let aTime = chatStore.messages(for: a.jid).last?.timestamp ?? .distantPast
+            let bTime = chatStore.messages(for: b.jid).last?.timestamp ?? .distantPast
+            return aTime > bTime
+        }
     }
 }

@@ -265,12 +265,19 @@ private struct ChatPane: View {
                     Spacer(minLength: 32)
                 }
 
-                MarkdownMessage(content: msg.body)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(bubbleColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
+                VStack(alignment: msg.direction == .incoming ? .leading : .trailing, spacing: 2) {
+                    MarkdownMessage(content: msg.body)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(bubbleColor)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
+
+                    Text(formatTimestamp(msg.timestamp))
+                        .font(.system(size: 10, weight: .regular, design: .default))
+                        .foregroundStyle(.secondary.opacity(0.7))
+                        .padding(.horizontal, 4)
+                }
 
                 if msg.direction == .incoming {
                     Spacer(minLength: 32)
@@ -286,6 +293,29 @@ private struct ChatPane: View {
                 return Color.secondary.opacity(0.12)
             case .outgoing:
                 return Color.accentColor.opacity(0.18)
+            }
+        }
+
+        private func formatTimestamp(_ date: Date) -> String {
+            let calendar = Calendar.current
+            let now = Date()
+
+            if calendar.isDateInToday(date) {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "h:mm a"
+                return formatter.string(from: date)
+            } else if calendar.isDateInYesterday(date) {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "h:mm a"
+                return "Yesterday \(formatter.string(from: date))"
+            } else if calendar.isDate(date, equalTo: now, toGranularity: .weekOfYear) {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "EEEE h:mm a"
+                return formatter.string(from: date)
+            } else {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "MMM d, h:mm a"
+                return formatter.string(from: date)
             }
         }
     }
