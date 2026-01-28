@@ -5,11 +5,10 @@ import Martin
 @MainActor
 public final class SwitchDirectoryService: ObservableObject {
     @Published public private(set) var dispatchers: [DirectoryItem] = []
-    @Published public private(set) var groups: [DirectoryItem] = []
     @Published public private(set) var individuals: [DirectoryItem] = []
-    @Published public private(set) var subagents: [DirectoryItem] = []
 
-    @Published public var navigationSelection: NavigationSelection? = nil
+    @Published public private(set) var selectedDispatcherJid: String? = nil
+    @Published public private(set) var selectedSessionJid: String? = nil
     @Published public private(set) var chatTarget: ChatTarget? = nil
 
     private let xmpp: XMPPService
@@ -21,6 +20,7 @@ public final class SwitchDirectoryService: ObservableObject {
     private var subscribedNodes: Set<String> = []
     private var lastSelectedIndividualJid: String? = nil
     private var individualsRefreshToken: UUID? = nil
+    private var groupsRefreshToken: UUID? = nil
 
     public init(
         xmpp: XMPPService,
@@ -37,36 +37,31 @@ public final class SwitchDirectoryService: ObservableObject {
         // PubSub service is often a domain JID (e.g. pubsub.example.com).
         self.pubSubBareJid = pubSubJid.map { JID($0).bareJid }
         self.nodes = nodes
-        bindSelectionPipeline()
         bindPubSubRefresh()
     }
 
     public func refreshAll() {
         refreshDispatchers()
-        refreshChildListsForCurrentSelection()
+        if let dispatcher = selectedDispatcherJid {
+            refreshSessionsForDispatcher(dispatcherJid: dispatcher)
+        } else {
+            individuals = []
+        }
     }
 
     public func selectDispatcher(_ item: DirectoryItem) {
-        navigationSelection = .dispatcher(item.jid)
+        selectedDispatcherJid = item.jid
+        selectedSessionJid = nil
         chatTarget = .dispatcher(item.jid)
         lastSelectedIndividualJid = nil
-        xmpp.ensureHistoryLoaded(with: item.jid)
-    }
-
-    public func selectGroup(_ item: DirectoryItem) {
-        navigationSelection = .group(item.jid)
+        individuals = []
+        refreshSessionsForDispatcher(dispatcherJid: item.jid)
     }
 
     public func selectIndividual(_ item: DirectoryItem) {
-        navigationSelection = .individual(item.jid)
+        selectedSessionJid = item.jid
         chatTarget = .individual(item.jid)
         lastSelectedIndividualJid = item.jid
-        xmpp.ensureHistoryLoaded(with: item.jid)
-    }
-
-    public func selectSubagent(_ item: DirectoryItem) {
-        navigationSelection = .subagent(item.jid)
-        chatTarget = .subagent(item.jid)
         xmpp.ensureHistoryLoaded(with: item.jid)
     }
 
@@ -104,46 +99,32 @@ public final class SwitchDirectoryService: ObservableObject {
             self?.queryItems(node: node) { items in
                 guard let self else { return }
                 self.dispatchers = items
-            }
-        }
-    }
 
-    private func refreshChildListsForCurrentSelection() {
-        switch navigationSelection {
-        case .dispatcher(let dispatcherJid):
-            refreshGroups(dispatcherJid: dispatcherJid)
-            subagents = []
-        case .group(let groupJid):
-            refreshIndividuals(groupJid: groupJid)
-            subagents = []
-        case .individual(let individualJid):
-            refreshSubagents(individualJid: individualJid)
-        case .subagent:
-            break
-        case .none:
-            groups = []
-            individuals = []
-            subagents = []
-        }
-    }
-
-    private func refreshGroups(dispatcherJid: String) {
-        let node = nodes.groups(dispatcherJid)
-        ensureSubscribed(to: node) { [weak self] in
-            self?.queryItems(node: node) { items in
-                guard let self else { return }
-                self.groups = items
-
-                // Default: when a dispatcher is selected, show sessions immediately.
-                // Groups are a (future) filter and shouldn't block the sessions list.
-                if case .dispatcher(let selected) = self.navigationSelection, selected == dispatcherJid {
-                    self.refreshIndividualsForDispatcher(groups: items)
+                // If nothing is selected yet, pick the first dispatcher and load sessions.
+                if self.selectedDispatcherJid == nil, let first = items.first {
+                    self.selectDispatcher(first)
                 }
             }
         }
     }
 
-    private func refreshIndividualsForDispatcher(groups: [DirectoryItem]) {
+    private func refreshSessionsForDispatcher(dispatcherJid: String) {
+        let token = UUID()
+        groupsRefreshToken = token
+
+        let node = nodes.groups(dispatcherJid)
+        ensureSubscribed(to: node) { [weak self] in
+            self?.queryItems(node: node) { items in
+                guard let self else { return }
+
+                guard self.groupsRefreshToken == token else { return }
+                guard self.selectedDispatcherJid == dispatcherJid else { return }
+                self.refreshIndividualsForDispatcher(dispatcherJid: dispatcherJid, groups: items)
+            }
+        }
+    }
+
+    private func refreshIndividualsForDispatcher(dispatcherJid: String, groups: [DirectoryItem]) {
         let token = UUID()
         individualsRefreshToken = token
 
@@ -153,7 +134,7 @@ public final class SwitchDirectoryService: ObservableObject {
         }
 
         if groups.count == 1, let only = groups.first {
-            refreshIndividuals(groupJid: only.jid)
+            refreshIndividuals(groupJid: only.jid, dispatcherJid: dispatcherJid, token: token)
             return
         }
 
@@ -167,6 +148,7 @@ public final class SwitchDirectoryService: ObservableObject {
                 guard let self else { return }
                 self.queryItems(node: node) { items in
                     guard self.individualsRefreshToken == token else { return }
+                    guard self.selectedDispatcherJid == dispatcherJid else { return }
                     for it in items {
                         aggregate[it.jid] = it
                     }
@@ -183,20 +165,14 @@ public final class SwitchDirectoryService: ObservableObject {
         }
     }
 
-    private func refreshIndividuals(groupJid: String) {
+    private func refreshIndividuals(groupJid: String, dispatcherJid: String, token: UUID) {
         let node = nodes.individuals(groupJid)
         ensureSubscribed(to: node) { [weak self] in
             self?.queryItems(node: node) { items in
-                self?.individuals = items
-            }
-        }
-    }
-
-    private func refreshSubagents(individualJid: String) {
-        let node = nodes.subagents(individualJid)
-        ensureSubscribed(to: node) { [weak self] in
-            self?.queryItems(node: node) { items in
-                self?.subagents = items
+                guard let self else { return }
+                guard self.individualsRefreshToken == token else { return }
+                guard self.selectedDispatcherJid == dispatcherJid else { return }
+                self.individuals = items
             }
         }
     }
@@ -229,15 +205,6 @@ public final class SwitchDirectoryService: ObservableObject {
                 completion()
             }
         })
-    }
-
-    private func bindSelectionPipeline() {
-        $navigationSelection
-            .removeDuplicates()
-            .sink { [weak self] _ in
-                self?.refreshChildListsForCurrentSelection()
-            }
-            .store(in: &cancellables)
     }
 
     private func bindPubSubRefresh() {

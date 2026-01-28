@@ -24,13 +24,10 @@ private struct DirectoryShellView: View {
 
     var body: some View {
         HSplitView {
-            ColumnList(title: "Dispatchers", items: directory.dispatchers, selected: directory.navigationSelection) { item in
+            ColumnList(title: "Dispatchers", items: directory.dispatchers, selectedJid: directory.selectedDispatcherJid) { item in
                 directory.selectDispatcher(item)
             }
-            ColumnList(title: "Groups", items: directory.groups, selected: directory.navigationSelection, showsSelection: false) { item in
-                directory.selectGroup(item)
-            }
-            ColumnList(title: "Sessions", items: directory.individuals, selected: directory.navigationSelection) { item in
+            ColumnList(title: "Sessions", items: directory.individuals, selectedJid: directory.selectedSessionJid) { item in
                 directory.selectIndividual(item)
             }
 
@@ -77,8 +74,7 @@ private struct DirectoryShellView: View {
 private struct ColumnList: View {
     let title: String
     let items: [DirectoryItem]
-    let selected: NavigationSelection?
-    var showsSelection: Bool = true
+    let selectedJid: String?
     let onSelect: (DirectoryItem) -> Void
 
     var body: some View {
@@ -101,7 +97,7 @@ private struct ColumnList: View {
                     .contentShape(Rectangle())
                     .onTapGesture { onSelect(item) }
                     .listRowSeparator(.hidden)
-                    .listRowBackground((showsSelection && isSelected(item)) ? Color.accentColor.opacity(0.16) : Color.clear)
+                    .listRowBackground(isSelected(item) ? Color.accentColor.opacity(0.16) : Color.clear)
             }
             .listStyle(.inset)
         }
@@ -109,12 +105,7 @@ private struct ColumnList: View {
     }
 
     private func isSelected(_ item: DirectoryItem) -> Bool {
-        switch selected {
-        case .dispatcher(let jid), .group(let jid), .individual(let jid), .subagent(let jid):
-            return jid == item.jid
-        case .none:
-            return false
-        }
+        return selectedJid == item.jid
     }
 
     private struct Row: View {
@@ -195,11 +186,8 @@ private struct ChatPane: View {
 private struct EmptyChatView: View {
     var body: some View {
         VStack(spacing: 10) {
-            Text("Select a dispatcher, session, or subagent")
+            Text("Select a dispatcher, then a session")
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
-            Text("Groups only filter the hierarchy and do not change the chat.")
-                .font(.system(size: 12, weight: .regular, design: .default))
-                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
@@ -237,7 +225,7 @@ private struct NoDirectoryView: View {
             Text(statusText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
-            Text("Set SWITCH_DIRECTORY_JID in .env to enable the 4-column hierarchy.")
+            Text("Set SWITCH_DIRECTORY_JID in .env to enable dispatcher + sessions lists.")
                 .font(.system(size: 12, weight: .regular, design: .default))
                 .foregroundStyle(.secondary)
         }
