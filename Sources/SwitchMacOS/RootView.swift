@@ -294,6 +294,8 @@ private struct MarkdownMessage: View {
             .font(.system(size: 13, weight: .regular, design: .default))
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .lineSpacing(2)
     }
 
     private func normalize(_ s: String) -> String {
@@ -326,6 +328,13 @@ private struct MarkdownMessage: View {
         if looksLikeLogs(out) {
             return "```text\n" + out + "\n```"
         }
+
+        // Some models emit structured markdown without newlines between tokens
+        // (e.g. "#IssueSeverity" or "1Duplicated"). This is hard to render
+        // readably; insert a few safe breaks.
+        out = out
+            .replacingOccurrences(of: "#", with: "\n#")
+            .replacingOccurrences(of: "—", with: " — ")
 
         return out
     }
