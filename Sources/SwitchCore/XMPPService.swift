@@ -7,10 +7,10 @@ private let logger = Logger(subsystem: "com.switch.macos", category: "XMPPServic
 
 class DebugStreamLogger: StreamLogger {
     func incoming(_ value: StreamEvent) {
-        logger.error("XMPP <<< \(String(describing: value), privacy: .public)")
+        logger.debug("XMPP <<< \(String(describing: value), privacy: .public)")
     }
     func outgoing(_ value: StreamEvent) {
-        logger.error("XMPP >>> \(String(describing: value), privacy: .public)")
+        logger.debug("XMPP >>> \(String(describing: value), privacy: .public)")
     }
 }
 
@@ -52,7 +52,6 @@ public final class XMPPService: ObservableObject {
     public func connect(using config: AppConfig) {
         client.streamLogger = debugLogger
         logger.info("Connecting to \(config.xmppHost, privacy: .public):\(config.xmppPort) as \(config.xmppJid, privacy: .public)")
-        logger.info("Password length: \(config.xmppPassword.count), first 4 chars: \(String(config.xmppPassword.prefix(4)), privacy: .public)...")
         configureClient(using: config)
         status = .connecting
         statusText = "Connecting..."

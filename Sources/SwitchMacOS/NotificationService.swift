@@ -12,23 +12,6 @@ final class NotificationService: NSObject, ObservableObject {
     func setup(chatStore: ChatStore, directoryService: SwitchDirectoryService?) {
         self.directoryService = directoryService
 
-        // UNUserNotificationCenter requires a proper .app bundle with a bundle identifier.
-        // When running as a bare executable (e.g. via `swift build`), skip notification setup.
-        guard Bundle.main.bundleIdentifier != nil else {
-            chatStore.liveIncomingMessage
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] message in
-                    self?.handleIncoming(message)
-                }
-                .store(in: &cancellables)
-            return
-        }
-
-        notificationsAvailable = true
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
-
         chatStore.liveIncomingMessage
             .receive(on: DispatchQueue.main)
             .sink { [weak self] message in
@@ -41,6 +24,18 @@ final class NotificationService: NSObject, ObservableObject {
                 NSApplication.shared.dockTile.badgeLabel = nil
             }
             .store(in: &cancellables)
+
+        // UNUserNotificationCenter requires a proper .app bundle with a bundle identifier.
+        // When running as a bare executable (e.g. via `swift build`), skip system notification setup.
+        guard Bundle.main.bundleIdentifier != nil else {
+            notificationsAvailable = false
+            return
+        }
+
+        notificationsAvailable = true
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
     private func handleIncoming(_ message: ChatMessage) {
@@ -67,17 +62,11 @@ final class NotificationService: NSObject, ObservableObject {
 
     private func isActiveChatThread(_ threadJid: String) -> Bool {
         guard let target = directoryService?.chatTarget else { return false }
-        switch target {
-        case .dispatcher(let jid), .individual(let jid), .subagent(let jid):
-            return jid == threadJid
-        }
+        return target.jid == threadJid
     }
 
     private func localPart(of jid: String) -> String {
-        if let atIndex = jid.firstIndex(of: "@") {
-            return String(jid[jid.startIndex..<atIndex])
-        }
-        return jid
+        jid.split(separator: "@", maxSplits: 1).first.map(String.init) ?? jid
     }
 
     private func incrementBadge() {

@@ -25,6 +25,15 @@ public enum ChatTarget: Hashable, Sendable {
     case subagent(String)
 }
 
+public extension ChatTarget {
+    var jid: String {
+        switch self {
+        case .dispatcher(let jid), .individual(let jid), .subagent(let jid):
+            return jid
+        }
+    }
+}
+
 public struct SwitchDirectoryNodes: Sendable {
     public var dispatchers: String = "dispatchers"
     public var groups: (String) -> String = { dispatcherJid in "groups:\(dispatcherJid)" }

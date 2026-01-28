@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import SwitchCore
 
@@ -9,7 +10,7 @@ struct RootView: View {
             if let error = model.configError {
                 ConfigErrorView(error: error)
             } else if let directory = model.directory {
-                DirectoryShellView(directory: directory, xmpp: model.xmpp, chatStore: model.xmpp.chatStore)
+                DirectoryShellView(directory: directory, xmpp: model.xmpp)
             } else {
                 NoDirectoryView(statusText: model.xmpp.statusText)
             }
@@ -20,7 +21,6 @@ struct RootView: View {
 private struct DirectoryShellView: View {
     @ObservedObject var directory: SwitchDirectoryService
     @ObservedObject var xmpp: XMPPService
-    @ObservedObject var chatStore: ChatStore
     @State private var composerText: String = ""
 
     var body: some View {
@@ -33,8 +33,8 @@ private struct DirectoryShellView: View {
             }
 
             ChatPane(
-                title: chatTitle(target: directory.chatTarget),
-                messages: messagesForActiveChat(),
+                title: chatTitle,
+                messages: directory.messagesForActiveChat(),
                 composerText: $composerText,
                 onSend: {
                     let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -59,8 +59,8 @@ private struct DirectoryShellView: View {
         }
     }
 
-    private func chatTitle(target: ChatTarget?) -> String {
-        guard let target else { return "Chat" }
+    private var chatTitle: String {
+        guard let target = directory.chatTarget else { return "Chat" }
         switch target {
         case .dispatcher(let jid):
             return "Dispatcher: \(jid)"
@@ -69,16 +69,6 @@ private struct DirectoryShellView: View {
         case .subagent(let jid):
             return "Subagent: \(jid)"
         }
-    }
-
-    private func messagesForActiveChat() -> [ChatMessage] {
-        guard let target = directory.chatTarget else { return [] }
-        let jid: String
-        switch target {
-        case .dispatcher(let j), .individual(let j), .subagent(let j):
-            jid = j
-        }
-        return chatStore.messages(for: jid)
     }
 }
 
@@ -142,6 +132,9 @@ private struct ChatPane: View {
     let isEnabled: Bool
 
     private let bottomAnchorId: String = "__bottom__"
+    private let composerMinHeight: CGFloat = 28
+    private let composerMaxHeight: CGFloat = 160
+    @State private var composerHeight: CGFloat = 28
 
     var body: some View {
         VStack(spacing: 0) {
@@ -194,39 +187,66 @@ private struct ChatPane: View {
             Divider()
 
             HStack(spacing: 8) {
-                TextField("Message", text: $composerText, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(!isEnabled)
+                ZStack(alignment: .topLeading) {
+                    ComposerTextView(
+                        text: $composerText,
+                        measuredHeight: $composerHeight,
+                        minHeight: composerMinHeight,
+                        maxHeight: composerMaxHeight,
+                        isEnabled: isEnabled,
+                        onSubmit: onSend
+                    )
+
+                    if composerText.isEmpty {
+                        Text("Message")
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .frame(minHeight: composerHeight, maxHeight: composerHeight)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color(NSColor.controlBackgroundColor))
+                )
                 Button("Send") { onSend() }
                     .disabled(!isEnabled || composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(10)
         }
         .frame(minWidth: 420)
+        .onChange(of: composerText) { newValue in
+            if newValue.isEmpty {
+                composerHeight = composerMinHeight
+            }
+        }
     }
 
     private func scrollToBottom(using proxy: ScrollViewProxy) {
         guard isEnabled else { return }
         Task { @MainActor in
-            withAnimation(nil) {
-                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            func scrollNow() {
+                withAnimation(nil) {
+                    proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                }
             }
+
+            scrollNow()
 
             // Layout can change after the first render (especially Markdown).
             await Task.yield()
-            withAnimation(nil) {
-                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-            }
+            scrollNow()
 
             try? await Task.sleep(nanoseconds: 150_000_000)
-            withAnimation(nil) {
-                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-            }
+            scrollNow()
 
             try? await Task.sleep(nanoseconds: 500_000_000)
-            withAnimation(nil) {
-                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-            }
+            scrollNow()
         }
     }
 
@@ -265,12 +285,134 @@ private struct ChatPane: View {
     }
 }
 
+private final class SubmitTextView: NSTextView {
+    var onSubmit: (() -> Void)?
+    var allowSubmit: (() -> Bool)?
+
+    override func keyDown(with event: NSEvent) {
+        let isReturnKey = (event.keyCode == 36) || (event.keyCode == 76)
+        let isShiftPressed = event.modifierFlags.contains(.shift)
+
+        if isReturnKey, !isShiftPressed {
+            if allowSubmit?() ?? true {
+                onSubmit?()
+                return
+            }
+        }
+
+        super.keyDown(with: event)
+    }
+}
+
+private struct ComposerTextView: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var measuredHeight: CGFloat
+    let minHeight: CGFloat
+    let maxHeight: CGFloat
+    let isEnabled: Bool
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+
+        let textView = SubmitTextView()
+        textView.delegate = context.coordinator
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.isSelectable = true
+        textView.isEditable = isEnabled
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.font = .systemFont(ofSize: 13)
+        textView.string = text
+        textView.drawsBackground = false
+        textView.backgroundColor = .clear
+        textView.textColor = .labelColor
+        textView.onSubmit = onSubmit
+        textView.allowSubmit = { isEnabled }
+
+        if let container = textView.textContainer {
+            container.widthTracksTextView = true
+            container.heightTracksTextView = false
+        }
+
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+        context.coordinator.updateHeightIfNeeded()
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = nsView.documentView as? SubmitTextView else { return }
+
+        textView.isEditable = isEnabled
+        textView.onSubmit = onSubmit
+        textView.allowSubmit = { isEnabled }
+
+        if textView.string != text {
+            textView.string = text
+        }
+
+        context.coordinator.parent = self
+        context.coordinator.textView = textView
+        context.coordinator.updateHeightIfNeeded()
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ComposerTextView
+        weak var textView: NSTextView?
+
+        init(_ parent: ComposerTextView) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            parent.text = tv.string
+            updateHeightIfNeeded()
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            updateHeightIfNeeded()
+        }
+
+        func updateHeightIfNeeded() {
+            guard let tv = textView else { return }
+            guard let container = tv.textContainer, let layout = tv.layoutManager else { return }
+
+            layout.ensureLayout(for: container)
+            let used = layout.usedRect(for: container)
+            let rawHeight = used.height + tv.textContainerInset.height * 2
+
+            let clamped = min(max(rawHeight, parent.minHeight), parent.maxHeight)
+            if abs(parent.measuredHeight - clamped) > 0.5 {
+                DispatchQueue.main.async {
+                    self.parent.measuredHeight = clamped
+                }
+            }
+        }
+    }
+}
+
 private struct MarkdownMessage: View {
     let content: String
 
-    var bodyView: some View {
+    var body: some View {
         let normalized = normalize(content)
-        return VStack(alignment: .leading, spacing: 6) {
+
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(parseMarkdownBlocks(normalized), id: \.id) { block in
                 switch block.kind {
                 case .markdown(let s):
@@ -281,11 +423,7 @@ private struct MarkdownMessage: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    var body: some View {
-        bodyView
-            .textSelection(.enabled)
+        .textSelection(.enabled)
     }
 
     private func markdownText(_ s: String) -> some View {
@@ -302,22 +440,21 @@ private struct MarkdownMessage: View {
                     // For lines within a paragraph, convert \n to hard breaks.
                     let hardBreaks = para.replacingOccurrences(of: "\n", with: "  \n")
                     let attr = (try? AttributedString(markdown: hardBreaks)) ?? AttributedString(para)
-                    Text(attr)
-                        .font(.system(size: 13.5, weight: .regular, design: .rounded))
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .lineSpacing(4)
+                    messageText(Text(attr))
                 } else {
-                    Text(verbatim: para)
-                        .font(.system(size: 13.5, weight: .regular, design: .rounded))
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .lineSpacing(4)
+                    messageText(Text(verbatim: para))
                 }
             }
         }
+    }
+
+    private func messageText(_ text: Text) -> some View {
+        text
+            .font(.system(size: 13.5, weight: .regular, design: .rounded))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .lineSpacing(4)
     }
 
     private func containsMarkdownSyntax(_ s: String) -> Bool {

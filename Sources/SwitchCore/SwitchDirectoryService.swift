@@ -69,11 +69,7 @@ public final class SwitchDirectoryService: ObservableObject {
 
     public func sendChat(body: String) {
         guard let target = chatTarget else { return }
-        let jid: String
-        switch target {
-        case .dispatcher(let j), .individual(let j), .subagent(let j):
-            jid = j
-        }
+        let jid = target.jid
 
         switch target {
         case .subagent:
@@ -93,12 +89,7 @@ public final class SwitchDirectoryService: ObservableObject {
 
     public func messagesForActiveChat() -> [ChatMessage] {
         guard let target = chatTarget else { return [] }
-        let jid: String
-        switch target {
-        case .dispatcher(let j), .individual(let j), .subagent(let j):
-            jid = j
-        }
-        return xmpp.chatStore.messages(for: jid)
+        return xmpp.chatStore.messages(for: target.jid)
     }
 
     private func pollForNewSession(dispatcherJid: String, remaining: Int = 5) {
