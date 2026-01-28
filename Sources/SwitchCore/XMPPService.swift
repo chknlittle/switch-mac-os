@@ -7,6 +7,19 @@ private let logger = Logger(subsystem: "com.switch.macos", category: "XMPPServic
 
 public let switchMetaNamespace = "urn:switch:message-meta"
 
+private func isSwitchMetaElement(_ el: Element, localName: String) -> Bool {
+    if el.xmlns == switchMetaNamespace {
+        return el.name == localName || el.name.hasSuffix(":\(localName)") || el.name.hasSuffix("}\(localName)")
+    }
+    // Some XML parsers preserve the namespace in Clark notation in the element name.
+    // Example: "{urn:switch:message-meta}meta"
+    let clarkPrefix = "{\(switchMetaNamespace)}"
+    if el.name.hasPrefix(clarkPrefix) {
+        return el.name == "\(clarkPrefix)\(localName)"
+    }
+    return false
+}
+
 private func decodeJSON<T: Decodable>(_ type: T.Type, from json: String) -> T? {
     guard let data = json.data(using: .utf8) else { return nil }
     do {
@@ -40,10 +53,7 @@ public func parseMessageMeta(from element: Element) -> MessageMeta? {
     // Look for direct child:
     // <meta xmlns="urn:switch:message-meta" type="..."> ... </meta>
     // Be tolerant of namespace prefixes in parsed element names.
-    guard let metaElement = element.firstChild(where: { child in
-        guard child.xmlns == switchMetaNamespace else { return false }
-        return child.name == "meta" || child.name.hasSuffix(":meta")
-    }) else {
+    guard let metaElement = element.firstChild(where: { isSwitchMetaElement($0, localName: "meta") }) else {
         return nil
     }
 
@@ -73,9 +83,7 @@ public func parseMessageMeta(from element: Element) -> MessageMeta? {
 
     // Parse JSON payload if present
     var payloadJson: String? = nil
-    if let payloadElement = metaElement.firstChild(where: { child in
-        (child.name == "payload" || child.name.hasSuffix(":payload"))
-    }),
+    if let payloadElement = metaElement.firstChild(where: { isSwitchMetaElement($0, localName: "payload") || $0.name == "payload" || $0.name.hasSuffix(":payload") || $0.name.hasSuffix("}payload") }),
         (payloadElement.attribute("format") ?? "").lowercased() == "json" {
         payloadJson = payloadElement.value
     }
