@@ -130,6 +130,8 @@ private struct ChatPane: View {
     let onSend: () -> Void
     let isEnabled: Bool
 
+    @State private var lastScrolledMessageId: ChatMessage.ID? = nil
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -145,10 +147,25 @@ private struct ChatPane: View {
             if !isEnabled {
                 EmptyChatView()
             } else {
-                List(messages) { msg in
-                    MessageRow(msg: msg)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(messages) { msg in
+                                MessageRow(msg: msg)
+                                    .id(msg.id)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                    }
+                    .background(Color(NSColor.textBackgroundColor))
+                    .onAppear {
+                        scrollToBottom(using: proxy)
+                    }
+                    .onChange(of: messages.count) { _ in
+                        scrollToBottom(using: proxy)
+                    }
                 }
-                .listStyle(.plain)
             }
 
             Divider()
@@ -163,6 +180,16 @@ private struct ChatPane: View {
             .padding(10)
         }
         .frame(minWidth: 420)
+    }
+
+    private func scrollToBottom(using proxy: ScrollViewProxy) {
+        guard isEnabled else { return }
+        guard let lastId = messages.last?.id else { return }
+        guard lastScrolledMessageId != lastId else { return }
+        lastScrolledMessageId = lastId
+        DispatchQueue.main.async {
+            proxy.scrollTo(lastId, anchor: .bottom)
+        }
     }
 
     private struct MessageRow: View {
