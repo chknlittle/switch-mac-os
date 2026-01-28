@@ -21,6 +21,8 @@ public final class SwitchDirectoryService: ObservableObject {
     private var lastSelectedIndividualJid: String? = nil
     private var individualsRefreshToken: UUID? = nil
     private var groupsRefreshToken: UUID? = nil
+    private var awaitingNewSession = false
+    private var knownIndividualJids: Set<String> = []
 
     public init(
         xmpp: XMPPService,
@@ -81,6 +83,12 @@ public final class SwitchDirectoryService: ObservableObject {
         case .dispatcher, .individual:
             xmpp.sendMessage(to: jid, body: body)
         }
+
+        if case .dispatcher(let dispatcherJid) = target {
+            knownIndividualJids = Set(individuals.map { $0.jid })
+            awaitingNewSession = true
+            pollForNewSession(dispatcherJid: dispatcherJid)
+        }
     }
 
     public func messagesForActiveChat() -> [ChatMessage] {
@@ -91,6 +99,35 @@ public final class SwitchDirectoryService: ObservableObject {
             jid = j
         }
         return xmpp.chatStore.messages(for: jid)
+    }
+
+    private func pollForNewSession(dispatcherJid: String, remaining: Int = 5) {
+        guard remaining > 0, awaitingNewSession else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, self.awaitingNewSession else { return }
+            guard self.selectedDispatcherJid == dispatcherJid else {
+                self.awaitingNewSession = false
+                return
+            }
+            self.refreshSessionsForDispatcher(dispatcherJid: dispatcherJid)
+            self.pollForNewSession(dispatcherJid: dispatcherJid, remaining: remaining - 1)
+        }
+    }
+
+    private func autoSelectNewSessionIfNeeded() {
+        guard awaitingNewSession else { return }
+        guard case .dispatcher = chatTarget else {
+            awaitingNewSession = false
+            return
+        }
+        let currentJids = Set(individuals.map { $0.jid })
+        let newJids = currentJids.subtracting(knownIndividualJids)
+        guard let newJid = newJids.first,
+              let newItem = individuals.first(where: { $0.jid == newJid }) else {
+            return
+        }
+        awaitingNewSession = false
+        selectIndividual(newItem)
     }
 
     private func refreshDispatchers() {
@@ -159,6 +196,7 @@ public final class SwitchDirectoryService: ObservableObject {
                             return $0.name < $1.name
                         }
                         self.individuals = merged
+                        self.autoSelectNewSessionIfNeeded()
                     }
                 }
             }
@@ -173,6 +211,7 @@ public final class SwitchDirectoryService: ObservableObject {
                 guard self.individualsRefreshToken == token else { return }
                 guard self.selectedDispatcherJid == dispatcherJid else { return }
                 self.individuals = items
+                self.autoSelectNewSessionIfNeeded()
             }
         }
     }
