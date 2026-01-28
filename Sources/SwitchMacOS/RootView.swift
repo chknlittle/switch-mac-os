@@ -289,23 +289,35 @@ private struct MarkdownMessage: View {
     }
 
     private func markdownText(_ s: String) -> some View {
-        if containsMarkdownSyntax(s) {
-            let attr = (try? AttributedString(markdown: s)) ?? AttributedString(s)
-            return Text(attr)
-                .font(.system(size: 13, weight: .regular, design: .default))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .lineSpacing(2)
-        }
+        // Split on \n\n for paragraph breaks, then render each paragraph
+        // separately so spacing is controlled by the VStack, not by the
+        // markdown parser (which collapses single \n into spaces).
+        let paragraphs = s.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .init(charactersIn: "\n")) }
+            .filter { !$0.isEmpty }
 
-        // Plain text: preserve newlines exactly (like Siskin).
-        return Text(verbatim: s)
-            .font(.system(size: 13, weight: .regular, design: .default))
-            .foregroundStyle(.primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .lineSpacing(2)
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, para in
+                if containsMarkdownSyntax(para) {
+                    // For lines within a paragraph, convert \n to hard breaks.
+                    let hardBreaks = para.replacingOccurrences(of: "\n", with: "  \n")
+                    let attr = (try? AttributedString(markdown: hardBreaks)) ?? AttributedString(para)
+                    Text(attr)
+                        .font(.system(size: 13, weight: .regular, design: .default))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineSpacing(2)
+                } else {
+                    Text(verbatim: para)
+                        .font(.system(size: 13, weight: .regular, design: .default))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineSpacing(2)
+                }
+            }
+        }
     }
 
     private func containsMarkdownSyntax(_ s: String) -> Bool {
