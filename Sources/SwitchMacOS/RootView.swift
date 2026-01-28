@@ -182,6 +182,9 @@ private struct ChatPane: View {
                     .onChange(of: messages.last?.id) { _ in
                         scrollToBottom(using: proxy)
                     }
+                    .onChange(of: messages.last?.timestamp) { _ in
+                        scrollToBottom(using: proxy)
+                    }
                     .onChange(of: title) { _ in
                         scrollToBottom(using: proxy)
                     }
@@ -205,14 +208,25 @@ private struct ChatPane: View {
     private func scrollToBottom(using proxy: ScrollViewProxy) {
         guard isEnabled else { return }
         DispatchQueue.main.async {
-            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            withAnimation(nil) {
+                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            }
         }
         // The Markdown layout can change text height after the first pass.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            withAnimation(nil) {
+                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            withAnimation(nil) {
+                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            withAnimation(nil) {
+                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            }
         }
     }
 
@@ -276,12 +290,20 @@ private struct MarkdownMessage: View {
     private func markdownText(_ s: String) -> some View {
         // Preserve blank lines (paragraph breaks), but treat single newlines as
         // intentional line breaks (LLM output often uses them for layout).
-        let normalized = s.replacingOccurrences(of: "\r\n", with: "\n")
+        // Use a Markdown hard-break escape ("\\" at EOL) instead of trailing
+        // spaces, since the Swift markdown parser may trim end-of-line spaces.
+        let normalized = s
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\n")
+            .replacingOccurrences(of: "\u{2029}", with: "\n")
+            .replacingOccurrences(of: "\\n", with: "\n")
+
         let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         let hardWrappedLines = lines.map { line in
             if line.isEmpty { return "" }
-            if line.hasSuffix("  ") { return line }
-            return line + "  "
+            if line.hasSuffix("\\") { return line }
+            return line + "\\"
         }
         let hardWrapped = hardWrappedLines.joined(separator: "\n")
         let attr = (try? AttributedString(markdown: hardWrapped)) ?? AttributedString(normalized)
