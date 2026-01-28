@@ -69,6 +69,26 @@ public struct SwitchQuestionV1: Codable, Hashable, Sendable {
         self.options = options
         self.multiple = multiple
     }
+
+    private enum DecodingKeys: String, CodingKey {
+        case header
+        case question
+        case options
+        case multiple
+        case multiSelect = "multiSelect"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DecodingKeys.self)
+        self.header = try container.decodeIfPresent(String.self, forKey: .header)
+        self.question = try container.decodeIfPresent(String.self, forKey: .question)
+        self.options = try container.decodeIfPresent([SwitchQuestionOptionV1].self, forKey: .options)
+        if let m = try container.decodeIfPresent(Bool.self, forKey: .multiple) {
+            self.multiple = m
+        } else {
+            self.multiple = try container.decodeIfPresent(Bool.self, forKey: .multiSelect)
+        }
+    }
 }
 
 public struct SwitchQuestionOptionV1: Codable, Hashable, Sendable {
@@ -78,6 +98,30 @@ public struct SwitchQuestionOptionV1: Codable, Hashable, Sendable {
     public init(label: String, description: String? = nil) {
         self.label = label
         self.description = description
+    }
+
+    private enum DecodingKeys: String, CodingKey {
+        case label
+        case value
+        case name
+        case description
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DecodingKeys.self)
+        if let l = try container.decodeIfPresent(String.self, forKey: .label) {
+            self.label = l
+        } else if let v = try container.decodeIfPresent(String.self, forKey: .value) {
+            self.label = v
+        } else if let n = try container.decodeIfPresent(String.self, forKey: .name) {
+            self.label = n
+        } else {
+            throw DecodingError.keyNotFound(
+                DecodingKeys.label,
+                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Missing label/value/name")
+            )
+        }
+        self.description = try container.decodeIfPresent(String.self, forKey: .description)
     }
 }
 

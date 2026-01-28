@@ -45,7 +45,7 @@ private func decodeJSON<T: Decodable>(_ type: T.Type, from json: String) -> T? {
     do {
         return try JSONDecoder().decode(T.self, from: data)
     } catch {
-        logger.debug("Failed to decode JSON payload: \(String(describing: error), privacy: .public)")
+        logger.notice("Failed to decode JSON payload: \(String(describing: error), privacy: .public)")
         return nil
     }
 }
