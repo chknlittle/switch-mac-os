@@ -206,7 +206,7 @@ public final class XMPPService: ObservableObject {
 
                 switch direction {
                 case .incoming:
-                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp)
+                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp, isArchived: true)
                 case .outgoing:
                     self.chatStore.appendOutgoing(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp)
                 }

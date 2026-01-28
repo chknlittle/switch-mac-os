@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Martin
 
@@ -26,22 +27,26 @@ public struct ChatMessage: Identifiable, Hashable, Sendable {
 public final class ChatStore: ObservableObject {
     @Published public private(set) var threads: [String: [ChatMessage]] = [:]
 
+    public let liveIncomingMessage = PassthroughSubject<ChatMessage, Never>()
+
     public init() {}
 
     public func messages(for threadJid: String) -> [ChatMessage] {
         threads[threadJid] ?? []
     }
 
-    public func appendIncoming(threadJid: String, body: String, id: String?, timestamp: Date) {
-        appendIfMissing(
-            ChatMessage(
-                id: id ?? UUID().uuidString,
-                threadJid: threadJid,
-                direction: .incoming,
-                body: body,
-                timestamp: timestamp
-            )
+    public func appendIncoming(threadJid: String, body: String, id: String?, timestamp: Date, isArchived: Bool = false) {
+        let msg = ChatMessage(
+            id: id ?? UUID().uuidString,
+            threadJid: threadJid,
+            direction: .incoming,
+            body: body,
+            timestamp: timestamp
         )
+        let inserted = appendIfMissing(msg)
+        if inserted && !isArchived {
+            liveIncomingMessage.send(msg)
+        }
     }
 
     public func appendOutgoing(threadJid: String, body: String, id: String?, timestamp: Date) {
@@ -56,13 +61,15 @@ public final class ChatStore: ObservableObject {
         )
     }
 
-    private func appendIfMissing(_ message: ChatMessage) {
+    @discardableResult
+    private func appendIfMissing(_ message: ChatMessage) -> Bool {
         var arr = threads[message.threadJid] ?? []
         if arr.contains(where: { $0.id == message.id }) {
-            return
+            return false
         }
         arr.append(message)
         arr.sort { $0.timestamp < $1.timestamp }
         threads[message.threadJid] = arr
+        return true
     }
 }
