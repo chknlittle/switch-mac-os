@@ -45,6 +45,7 @@ private struct DirectoryShellView: View {
 
             ChatPane(
                 title: chatTitle,
+                threadJid: directory.chatTarget?.jid,
                 messages: messagesForActiveChat(),
                 composerText: $composerText,
                 onSend: {
@@ -155,6 +156,7 @@ private struct ColumnList: View {
 
 private struct ChatPane: View {
     let title: String
+    let threadJid: String?
     let messages: [ChatMessage]
     @Binding var composerText: String
     let onSend: () -> Void
@@ -165,6 +167,7 @@ private struct ChatPane: View {
     private let composerMinHeight: CGFloat = 28
     private let composerMaxHeight: CGFloat = 160
     @State private var composerHeight: CGFloat = 28
+    @State private var scrollTask: Task<Void, Never>? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -204,19 +207,13 @@ private struct ChatPane: View {
                         .padding(.vertical, 8)
                     }
                     .background(Color(NSColor.textBackgroundColor))
-                    .onAppear {
-                        scrollToBottom(using: proxy)
-                    }
-                    .onChange(of: messages.count) { _ in
+                    // Force a fresh scroll view per thread so switching chats
+                    // doesn't carry over scroll position.
+                    .id(threadJid ?? "__no_thread__")
+                    .task(id: threadJid) {
                         scrollToBottom(using: proxy)
                     }
                     .onChange(of: messages.last?.id) { _ in
-                        scrollToBottom(using: proxy)
-                    }
-                    .onChange(of: messages.last?.timestamp) { _ in
-                        scrollToBottom(using: proxy)
-                    }
-                    .onChange(of: title) { _ in
                         scrollToBottom(using: proxy)
                     }
                 }
@@ -267,7 +264,9 @@ private struct ChatPane: View {
 
     private func scrollToBottom(using proxy: ScrollViewProxy) {
         guard isEnabled else { return }
-        Task { @MainActor in
+
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
             func scrollNow() {
                 withAnimation(nil) {
                     proxy.scrollTo(bottomAnchorId, anchor: .bottom)
@@ -280,10 +279,7 @@ private struct ChatPane: View {
             await Task.yield()
             scrollNow()
 
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            scrollNow()
-
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000)
             scrollNow()
         }
     }
