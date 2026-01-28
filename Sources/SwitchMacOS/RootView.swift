@@ -270,7 +270,7 @@ private struct MarkdownMessage: View {
 
     var bodyView: some View {
         let normalized = normalize(content)
-        VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 6) {
             ForEach(parseMarkdownBlocks(normalized), id: \.id) { block in
                 switch block.kind {
                 case .markdown(let s):
