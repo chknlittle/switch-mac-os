@@ -20,6 +20,7 @@ public final class SwitchDirectoryService: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private var subscribedNodes: Set<String> = []
     private var lastSelectedIndividualJid: String? = nil
+    private var individualsRefreshToken: UUID? = nil
 
     public init(
         xmpp: XMPPService,
@@ -43,11 +44,6 @@ public final class SwitchDirectoryService: ObservableObject {
     public func refreshAll() {
         refreshDispatchers()
         refreshChildListsForCurrentSelection()
-    }
-
-    private func selectDispatcherForNavigation(_ jid: String) {
-        navigationSelection = .dispatcher(jid)
-        lastSelectedIndividualJid = nil
     }
 
     public func selectDispatcher(_ item: DirectoryItem) {
@@ -108,12 +104,6 @@ public final class SwitchDirectoryService: ObservableObject {
             self?.queryItems(node: node) { items in
                 guard let self else { return }
                 self.dispatchers = items
-
-                // Initial UX: select the first dispatcher so its default group
-                // auto-selects and sessions populate without extra clicks.
-                if self.navigationSelection == nil, let first = items.first {
-                    self.selectDispatcherForNavigation(first.jid)
-                }
             }
         }
     }
@@ -122,7 +112,6 @@ public final class SwitchDirectoryService: ObservableObject {
         switch navigationSelection {
         case .dispatcher(let dispatcherJid):
             refreshGroups(dispatcherJid: dispatcherJid)
-            individuals = []
             subagents = []
         case .group(let groupJid):
             refreshIndividuals(groupJid: groupJid)
@@ -145,26 +134,49 @@ public final class SwitchDirectoryService: ObservableObject {
                 guard let self else { return }
                 self.groups = items
 
-                // For now each dispatcher has a single "Sessions" group.
-                // Auto-select it to immediately show individuals.
-                if items.count == 1, let groupJid = items.first?.jid {
-                    let shouldAutoSelect: Bool
-                    switch self.navigationSelection {
-                    case .dispatcher(let selected):
-                        shouldAutoSelect = (selected == dispatcherJid)
-                    case .group(let selected):
-                        shouldAutoSelect = (selected == groupJid)
-                    default:
-                        shouldAutoSelect = false
-                    }
+                // Default: when a dispatcher is selected, show sessions immediately.
+                // Groups are a (future) filter and shouldn't block the sessions list.
+                if case .dispatcher(let selected) = self.navigationSelection, selected == dispatcherJid {
+                    self.refreshIndividualsForDispatcher(groups: items)
+                }
+            }
+        }
+    }
 
-                    if shouldAutoSelect {
-                        if self.navigationSelection != .group(groupJid) {
-                            self.navigationSelection = .group(groupJid)
+    private func refreshIndividualsForDispatcher(groups: [DirectoryItem]) {
+        let token = UUID()
+        individualsRefreshToken = token
+
+        if groups.isEmpty {
+            individuals = []
+            return
+        }
+
+        if groups.count == 1, let only = groups.first {
+            refreshIndividuals(groupJid: only.jid)
+            return
+        }
+
+        var remaining = groups.count
+        var aggregate: [String: DirectoryItem] = [:]
+
+        for group in groups {
+            let groupJid = group.jid
+            let node = nodes.individuals(groupJid)
+            ensureSubscribed(to: node) { [weak self] in
+                guard let self else { return }
+                self.queryItems(node: node) { items in
+                    guard self.individualsRefreshToken == token else { return }
+                    for it in items {
+                        aggregate[it.jid] = it
+                    }
+                    remaining -= 1
+                    if remaining == 0 {
+                        let merged = Array(aggregate.values).sorted {
+                            if $0.name == $1.name { return $0.jid < $1.jid }
+                            return $0.name < $1.name
                         }
-                        // Be explicit: refresh sessions now rather than relying on
-                        // Combine selection propagation timing.
-                        self.refreshIndividuals(groupJid: groupJid)
+                        self.individuals = merged
                     }
                 }
             }

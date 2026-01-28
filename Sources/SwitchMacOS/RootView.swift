@@ -27,14 +27,11 @@ private struct DirectoryShellView: View {
             ColumnList(title: "Dispatchers", items: directory.dispatchers, selected: directory.navigationSelection) { item in
                 directory.selectDispatcher(item)
             }
-            ColumnList(title: "Groups", items: directory.groups, selected: directory.navigationSelection) { item in
+            ColumnList(title: "Groups", items: directory.groups, selected: directory.navigationSelection, showsSelection: false) { item in
                 directory.selectGroup(item)
             }
             ColumnList(title: "Sessions", items: directory.individuals, selected: directory.navigationSelection) { item in
                 directory.selectIndividual(item)
-            }
-            ColumnList(title: "Subagents", items: directory.subagents, selected: directory.navigationSelection) { item in
-                directory.selectSubagent(item)
             }
 
             ChatPane(
@@ -81,6 +78,7 @@ private struct ColumnList: View {
     let title: String
     let items: [DirectoryItem]
     let selected: NavigationSelection?
+    var showsSelection: Bool = true
     let onSelect: (DirectoryItem) -> Void
 
     var body: some View {
@@ -103,7 +101,7 @@ private struct ColumnList: View {
                     .contentShape(Rectangle())
                     .onTapGesture { onSelect(item) }
                     .listRowSeparator(.hidden)
-                    .listRowBackground(isSelected(item) ? Color.accentColor.opacity(0.16) : Color.clear)
+                    .listRowBackground((showsSelection && isSelected(item)) ? Color.accentColor.opacity(0.16) : Color.clear)
             }
             .listStyle(.inset)
         }
