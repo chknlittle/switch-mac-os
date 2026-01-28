@@ -289,13 +289,43 @@ private struct MarkdownMessage: View {
     }
 
     private func markdownText(_ s: String) -> some View {
-        let attr = (try? AttributedString(markdown: s)) ?? AttributedString(s)
-        return Text(attr)
+        if containsMarkdownSyntax(s) {
+            let attr = (try? AttributedString(markdown: s)) ?? AttributedString(s)
+            return Text(attr)
+                .font(.system(size: 13, weight: .regular, design: .default))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .lineSpacing(2)
+        }
+
+        // Plain text: preserve newlines exactly (like Siskin).
+        return Text(verbatim: s)
             .font(.system(size: 13, weight: .regular, design: .default))
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .lineSpacing(2)
+    }
+
+    private func containsMarkdownSyntax(_ s: String) -> Bool {
+        // Cheap heuristics: prefer preserving plain text formatting unless the
+        // author is clearly using Markdown.
+        if s.contains("```") { return true }
+        if s.contains("**") || s.contains("__") { return true }
+        if s.contains("`") { return true }
+
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("#") { return true }
+        if trimmed.hasPrefix(">") { return true }
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") { return true }
+
+        if s.contains("\n- ") || s.contains("\n* ") { return true }
+        if s.contains("\n#") { return true }
+        if s.contains("[ ") && s.contains("](") { return true }
+        if s.contains("\n1. ") || s.contains("\n2. ") { return true }
+
+        return false
     }
 
     private func normalize(_ s: String) -> String {
