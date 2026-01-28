@@ -27,5 +27,12 @@ let package = Package(
                 "SwitchCore",
             ]
         ),
+        .testTarget(
+            name: "SwitchCoreTests",
+            dependencies: [
+                "SwitchCore",
+                .product(name: "Martin", package: "Martin"),
+            ]
+        ),
     ]
 )

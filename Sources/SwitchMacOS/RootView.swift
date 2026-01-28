@@ -259,6 +259,10 @@ private struct ChatPane: View {
     private struct MessageRow: View {
         let msg: ChatMessage
 
+        private var isToolMessage: Bool {
+            msg.meta?.isToolRelated ?? false
+        }
+
         var body: some View {
             HStack {
                 if msg.direction == .outgoing {
@@ -266,17 +270,32 @@ private struct ChatPane: View {
                 }
 
                 VStack(alignment: msg.direction == .incoming ? .leading : .trailing, spacing: 2) {
-                    MarkdownMessage(content: msg.body)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(bubbleColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
+                    if isToolMessage {
+                        toolMessageContent
+                    } else {
+                        MarkdownMessage(content: msg.body)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(bubbleColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
+                    }
 
-                    Text(formatTimestamp(msg.timestamp))
-                        .font(.system(size: 10, weight: .regular, design: .default))
-                        .foregroundStyle(.secondary.opacity(0.7))
-                        .padding(.horizontal, 4)
+                    HStack(spacing: 6) {
+                        if let tool = msg.meta?.tool {
+                            Text(tool)
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.secondary.opacity(0.8))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.secondary.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                        }
+                        Text(formatTimestamp(msg.timestamp))
+                            .font(.system(size: 10, weight: .regular, design: .default))
+                            .foregroundStyle(.secondary.opacity(0.7))
+                    }
+                    .padding(.horizontal, 4)
                 }
 
                 if msg.direction == .incoming {
@@ -285,6 +304,19 @@ private struct ChatPane: View {
             }
             .frame(maxWidth: .infinity, alignment: msg.direction == .incoming ? .leading : .trailing)
             .padding(.vertical, 4)
+        }
+
+        private var toolMessageContent: some View {
+            Text(msg.body)
+                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary.opacity(0.9))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(10)
+                .background(Color.black.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(maxWidth: 520, alignment: .leading)
         }
 
         private var bubbleColor: Color {
@@ -475,13 +507,25 @@ private struct MarkdownMessage: View {
                 if containsMarkdownSyntax(para) {
                     // For lines within a paragraph, convert \n to hard breaks.
                     let hardBreaks = para.replacingOccurrences(of: "\n", with: "  \n")
-                    let attr = (try? AttributedString(markdown: hardBreaks)) ?? AttributedString(para)
+                    let attr = styleInlineCode((try? AttributedString(markdown: hardBreaks)) ?? AttributedString(para))
                     messageText(Text(attr))
                 } else {
                     messageText(Text(verbatim: para))
                 }
             }
         }
+    }
+
+    private func styleInlineCode(_ input: AttributedString) -> AttributedString {
+        var result = input
+        for run in result.runs {
+            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+                let range = run.range
+                result[range].backgroundColor = Color.accentColor.opacity(0.25)
+                result[range].foregroundColor = Color.white
+            }
+        }
+        return result
     }
 
     private func messageText(_ text: Text) -> some View {
@@ -523,27 +567,21 @@ private struct MarkdownMessage: View {
     }
 
     private func preprocess(_ s: String) -> String {
-        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("[toolcall:"), trimmed.contains("]") else {
-            return s
-        }
-        guard !trimmed.contains("```") else {
-            return s
-        }
-        return "```\n\(trimmed)\n```"
+        // No content-based preprocessing needed - tool messages are now
+        // identified via XMPP message metadata and rendered separately
+        return s
     }
 
     private func codeBlock(_ s: String) -> some View {
-        ScrollView(.horizontal, showsIndicators: true) {
-            Text(s)
-                .font(.system(size: 12.5, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .lineSpacing(3)
-                .padding(10)
-        }
-        .background(Color.black.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        Text(s)
+            .font(.system(size: 12.5, weight: .regular, design: .monospaced))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lineSpacing(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(10)
+            .background(Color.black.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private struct MarkdownBlock {

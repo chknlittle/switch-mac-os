@@ -5,6 +5,34 @@ import os
 
 private let logger = Logger(subsystem: "com.switch.macos", category: "XMPPService")
 
+public let switchMetaNamespace = "urn:switch:message-meta"
+
+/// Parse Switch message metadata from an XMPP message element
+public func parseMessageMeta(from element: Element) -> MessageMeta? {
+    // Look for direct child: <meta xmlns="urn:switch:message-meta" type="..." tool="..."/>
+    guard let metaElement = element.findChild(name: "meta", xmlns: switchMetaNamespace) else {
+        return nil
+    }
+
+    guard let typeStr = metaElement.attribute("type") else {
+        return nil
+    }
+
+    let metaType: MessageMeta.MetaType
+    switch typeStr {
+    case "tool":
+        metaType = .tool
+    case "tool-result":
+        metaType = .toolResult
+    default:
+        metaType = .unknown
+    }
+
+    let tool = metaElement.attribute("tool")
+
+    return MessageMeta(type: metaType, tool: tool)
+}
+
 class DebugStreamLogger: StreamLogger {
     func incoming(_ value: StreamEvent) {
         logger.debug("XMPP <<< \(String(describing: value), privacy: .public)")
@@ -187,7 +215,8 @@ public final class XMPPService: ObservableObject {
                 guard let self else { return }
                 guard let from = received.message.from?.bareJid.stringValue else { return }
                 guard let body = received.message.body else { return }
-                self.chatStore.appendIncoming(threadJid: from, body: body, id: received.message.id, timestamp: received.message.delay?.stamp ?? Date())
+                let meta = parseMessageMeta(from: received.message.element)
+                self.chatStore.appendIncoming(threadJid: from, body: body, id: received.message.id, timestamp: received.message.delay?.stamp ?? Date(), meta: meta)
             }
             .store(in: &cancellables)
 
@@ -202,12 +231,13 @@ public final class XMPPService: ObservableObject {
                 let fromBare = archived.message.from?.bareJid
                 let direction: ChatMessage.Direction = (fromBare == localBare) ? .outgoing : .incoming
                 let id = "mam:\(archived.messageId)"
+                let meta = parseMessageMeta(from: archived.message.element)
 
                 switch direction {
                 case .incoming:
-                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp, isArchived: true)
+                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
                 case .outgoing:
-                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp)
+                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp, meta: meta)
                 }
             }
             .store(in: &cancellables)
