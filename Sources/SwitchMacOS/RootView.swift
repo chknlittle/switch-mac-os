@@ -30,7 +30,7 @@ private struct DirectoryShellView: View {
                 title: "Dispatchers",
                 items: directory.dispatchers,
                 selectedJid: directory.selectedDispatcherJid,
-                composingJids: dispatchersWithComposingSessions
+                composingJids: directory.dispatchersWithComposingSessions
             ) { item in
                 directory.selectDispatcher(item)
             }
@@ -86,14 +86,6 @@ private struct DirectoryShellView: View {
     private func messagesForActiveChat() -> [ChatMessage] {
         guard let target = directory.chatTarget else { return [] }
         return chatStore.messages(for: target.jid)
-    }
-
-    /// Returns set of dispatcher JIDs that have at least one composing session
-    private var dispatchersWithComposingSessions: Set<String> {
-        // For now, if any session is composing, we don't have a direct mapping
-        // to dispatcher. Return empty - we'll show indicators on sessions only.
-        // TODO: Track dispatcher->session relationship for this feature
-        return []
     }
 
     private var isChatTargetTyping: Bool {

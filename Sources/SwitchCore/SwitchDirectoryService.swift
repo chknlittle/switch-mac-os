@@ -11,6 +11,21 @@ public final class SwitchDirectoryService: ObservableObject {
     @Published public private(set) var selectedSessionJid: String? = nil
     @Published public private(set) var chatTarget: ChatTarget? = nil
 
+    /// Tracks which sessions belong to which dispatcher (dispatcher JID -> session JIDs)
+    private var dispatcherToSessions: [String: Set<String>] = [:]
+
+    /// Returns set of dispatcher JIDs that have at least one composing session
+    public var dispatchersWithComposingSessions: Set<String> {
+        var result: Set<String> = []
+        let composing = xmpp.composingJids
+        for (dispatcherJid, sessionJids) in dispatcherToSessions {
+            if !sessionJids.isDisjoint(with: composing) {
+                result.insert(dispatcherJid)
+            }
+        }
+        return result
+    }
+
     private let xmpp: XMPPService
     private let directoryJid: JID
     private let directoryBareJid: BareJID
@@ -184,6 +199,7 @@ public final class SwitchDirectoryService: ObservableObject {
                     if remaining == 0 {
                         let merged = self.sortByRecency(Array(aggregate.values))
                         self.individuals = merged
+                        self.dispatcherToSessions[dispatcherJid] = Set(merged.map { $0.jid })
                         self.loadHistoryForAllSessions()
                         self.autoSelectNewSessionIfNeeded()
                     }
@@ -200,6 +216,7 @@ public final class SwitchDirectoryService: ObservableObject {
                 guard self.individualsRefreshToken == token else { return }
                 guard self.selectedDispatcherJid == dispatcherJid else { return }
                 self.individuals = self.sortByRecency(items)
+                self.dispatcherToSessions[dispatcherJid] = Set(items.map { $0.jid })
                 self.loadHistoryForAllSessions()
                 self.autoSelectNewSessionIfNeeded()
             }
