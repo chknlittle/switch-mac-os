@@ -47,6 +47,7 @@ private struct DirectoryShellView: View {
                 title: chatTitle,
                 threadJid: directory.chatTarget?.jid,
                 messages: messagesForActiveChat(),
+                xmpp: xmpp,
                 composerText: $composerText,
                 onSend: {
                     let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -158,6 +159,7 @@ private struct ChatPane: View {
     let title: String
     let threadJid: String?
     let messages: [ChatMessage]
+    let xmpp: XMPPService
     @Binding var composerText: String
     let onSend: () -> Void
     let isEnabled: Bool
@@ -196,7 +198,7 @@ private struct ChatPane: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(messages) { msg in
-                                MessageRow(msg: msg)
+                                MessageRow(msg: msg, xmpp: xmpp)
                                     .id(msg.id)
                             }
                             Color.clear
@@ -286,6 +288,7 @@ private struct ChatPane: View {
 
     private struct MessageRow: View {
         let msg: ChatMessage
+        let xmpp: XMPPService
 
         private var isToolMessage: Bool {
             msg.meta?.isToolRelated ?? false
@@ -298,6 +301,17 @@ private struct ChatPane: View {
                 }
 
                 VStack(alignment: msg.direction == .incoming ? .leading : .trailing, spacing: 2) {
+                    if msg.direction == .incoming, let q = msg.meta?.question, msg.meta?.type == .question {
+                        QuestionCard(envelope: q) { answers, displayText in
+                            xmpp.sendQuestionReply(
+                                to: msg.threadJid,
+                                requestId: q.requestId,
+                                answers: answers,
+                                displayText: displayText
+                            )
+                        }
+                        .frame(maxWidth: 520, alignment: .leading)
+                    } else
                     if isToolMessage {
                         toolMessageContent
                     } else {
@@ -406,6 +420,215 @@ private struct ChatPane: View {
                 formatter.dateFormat = "MMM d, h:mm a"
                 return formatter.string(from: date)
             }
+        }
+    }
+
+    private struct QuestionCard: View {
+        let envelope: SwitchQuestionEnvelopeV1
+        let onSend: (_ answers: [[String]]?, _ displayText: String) -> Void
+
+        @State private var selections: [[String]]
+        @State private var freeText: [String]
+        @State private var sent: Bool = false
+
+        init(envelope: SwitchQuestionEnvelopeV1, onSend: @escaping (_ answers: [[String]]?, _ displayText: String) -> Void) {
+            self.envelope = envelope
+            self.onSend = onSend
+            _selections = State(initialValue: Array(repeating: [], count: envelope.questions.count))
+            _freeText = State(initialValue: Array(repeating: "", count: envelope.questions.count))
+        }
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("Question")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.orange.opacity(0.16))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    Text(envelope.engine ?? "")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("v\(envelope.version ?? 1)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(envelope.questions.indices, id: \.self) { idx in
+                    let q = envelope.questions[idx]
+                    let opts = q.options ?? []
+                    let isMultiple = q.multiple ?? false
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let header = q.header, !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text(header)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        } else if envelope.questions.count > 1 {
+                            Text("\(idx + 1))")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        }
+
+                        if let text = q.question, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text(text)
+                                .font(.system(size: 12.5, weight: .regular, design: .rounded))
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        if opts.isEmpty {
+                            TextField("Type your answer", text: bindingFreeText(idx))
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(sent)
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(opts.indices, id: \.self) { oIdx in
+                                    let opt = opts[oIdx]
+                                    optionRow(
+                                        label: opt.label,
+                                        description: opt.description,
+                                        isSelected: selections[idx].contains(opt.label),
+                                        isEnabled: !sent,
+                                        onTap: {
+                                            toggleOption(questionIndex: idx, label: opt.label, multiple: isMultiple)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, idx == 0 ? 0 : 6)
+                }
+
+                Divider()
+
+                HStack(spacing: 10) {
+                    Text("rid: \(envelope.requestId)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    if sent {
+                        Text("Sent")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Button("Reply") {
+                            let answers = buildAnswers()
+                            let display = buildDisplayText(from: answers)
+                            onSend(answers, display)
+                            sent = true
+                        }
+                        .disabled(!hasAnyInput)
+                    }
+                }
+            }
+            .padding(12)
+            .background(Color(NSColor.controlBackgroundColor))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.20), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+
+        private var hasAnyInput: Bool {
+            for i in envelope.questions.indices {
+                if !(selections[i].isEmpty) { return true }
+                if !freeText[i].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+            }
+            return false
+        }
+
+        private func bindingFreeText(_ idx: Int) -> Binding<String> {
+            Binding(
+                get: { freeText[idx] },
+                set: { freeText[idx] = $0 }
+            )
+        }
+
+        private func toggleOption(questionIndex: Int, label: String, multiple: Bool) {
+            if sent { return }
+            if multiple {
+                if let i = selections[questionIndex].firstIndex(of: label) {
+                    selections[questionIndex].remove(at: i)
+                } else {
+                    selections[questionIndex].append(label)
+                }
+            } else {
+                if selections[questionIndex] == [label] {
+                    selections[questionIndex] = []
+                } else {
+                    selections[questionIndex] = [label]
+                }
+            }
+        }
+
+        private func buildAnswers() -> [[String]]? {
+            var answers: [[String]] = []
+            answers.reserveCapacity(envelope.questions.count)
+
+            for idx in envelope.questions.indices {
+                let opts = envelope.questions[idx].options ?? []
+                if opts.isEmpty {
+                    let t = freeText[idx].trimmingCharacters(in: .whitespacesAndNewlines)
+                    answers.append(t.isEmpty ? [] : [t])
+                } else {
+                    answers.append(selections[idx])
+                }
+            }
+
+            return answers
+        }
+
+        private func buildDisplayText(from answers: [[String]]?) -> String {
+            let a = answers ?? []
+            if envelope.questions.count <= 1 {
+                let s = (a.first ?? []).joined(separator: ", ")
+                return s.isEmpty ? "(no answer)" : s
+            }
+
+            var lines: [String] = []
+            for i in 0..<min(envelope.questions.count, a.count) {
+                let s = a[i].joined(separator: ", ")
+                if !s.isEmpty {
+                    lines.append("\(i + 1)) \(s)")
+                }
+            }
+            return lines.isEmpty ? "(no answer)" : lines.joined(separator: "\n")
+        }
+
+        private func optionRow(label: String, description: String?, isSelected: Bool, isEnabled: Bool, onTap: @escaping () -> Void) -> some View {
+            Button(action: onTap) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                        .padding(.top, 1)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(label)
+                            .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                        if let description, !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text(description)
+                                .font(.system(size: 11.5, weight: .regular, design: .default))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(isSelected ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(!isEnabled)
         }
     }
 }

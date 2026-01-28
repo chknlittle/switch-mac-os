@@ -7,21 +7,37 @@ public struct MessageMeta: Hashable, Sendable {
         case tool
         case toolResult = "tool-result"
         case runStats = "run-stats"
+        case question
+        case questionReply = "question-reply"
         case unknown
     }
 
     public let type: MetaType
     public let tool: String?
     public let runStats: RunStats?
+    public let requestId: String?
+    public let question: SwitchQuestionEnvelopeV1?
 
-    public init(type: MetaType, tool: String? = nil, runStats: RunStats? = nil) {
+    public init(
+        type: MetaType,
+        tool: String? = nil,
+        runStats: RunStats? = nil,
+        requestId: String? = nil,
+        question: SwitchQuestionEnvelopeV1? = nil
+    ) {
         self.type = type
         self.tool = tool
         self.runStats = runStats
+        self.requestId = requestId
+        self.question = question
     }
 
     public var isToolRelated: Bool {
         type == .tool || type == .toolResult
+    }
+
+    public var isQuestionRelated: Bool {
+        type == .question || type == .questionReply
     }
 }
 

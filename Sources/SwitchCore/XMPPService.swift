@@ -7,6 +7,34 @@ private let logger = Logger(subsystem: "com.switch.macos", category: "XMPPServic
 
 public let switchMetaNamespace = "urn:switch:message-meta"
 
+private func decodeJSON<T: Decodable>(_ type: T.Type, from json: String) -> T? {
+    guard let data = json.data(using: .utf8) else { return nil }
+    do {
+        return try JSONDecoder().decode(T.self, from: data)
+    } catch {
+        logger.debug("Failed to decode JSON payload: \(String(describing: error), privacy: .public)")
+        return nil
+    }
+}
+
+public func buildSwitchMetaElement(type: String, tool: String? = nil, attrs: [String: String] = [:], payloadJson: String? = nil) -> Element {
+    let meta = Element(name: "meta", xmlns: switchMetaNamespace)
+    meta.attribute("type", newValue: type)
+    if let tool {
+        meta.attribute("tool", newValue: tool)
+    }
+    for (k, v) in attrs {
+        if k == "type" || k == "tool" { continue }
+        meta.attribute(k, newValue: v)
+    }
+    if let payloadJson {
+        let payload = Element(name: "payload", cdata: payloadJson, xmlns: switchMetaNamespace)
+        payload.attribute("format", newValue: "json")
+        meta.addChild(payload)
+    }
+    return meta
+}
+
 /// Parse Switch message metadata from an XMPP message element
 public func parseMessageMeta(from element: Element) -> MessageMeta? {
     // Look for direct child: <meta xmlns="urn:switch:message-meta" type="..." .../>
@@ -26,11 +54,29 @@ public func parseMessageMeta(from element: Element) -> MessageMeta? {
         metaType = .toolResult
     case "run-stats":
         metaType = .runStats
+    case "question":
+        metaType = .question
+    case "question-reply":
+        metaType = .questionReply
     default:
         metaType = .unknown
     }
 
     let tool = metaElement.attribute("tool")
+
+    let requestId = metaElement.attribute("request_id")
+
+    // Parse JSON payload if present
+    var payloadJson: String? = nil
+    if let payloadElement = metaElement.findChild(name: "payload", xmlns: switchMetaNamespace),
+       payloadElement.attribute("format") == "json" {
+        payloadJson = payloadElement.value
+    }
+
+    var question: SwitchQuestionEnvelopeV1? = nil
+    if metaType == .question, let payloadJson {
+        question = decodeJSON(SwitchQuestionEnvelopeV1.self, from: payloadJson)
+    }
 
     // Parse run-stats attributes if present
     var runStats: RunStats? = nil
@@ -53,7 +99,7 @@ public func parseMessageMeta(from element: Element) -> MessageMeta? {
         )
     }
 
-    return MessageMeta(type: metaType, tool: tool, runStats: runStats)
+    return MessageMeta(type: metaType, tool: tool, runStats: runStats, requestId: requestId, question: question)
 }
 
 class DebugStreamLogger: StreamLogger {
@@ -119,7 +165,26 @@ public final class XMPPService: ObservableObject {
     }
 
     public func sendMessage(to bareJid: String, body: String) {
-        sendWireMessage(to: bareJid, wireBody: body, displayBody: body)
+        sendWireMessage(to: bareJid, wireBody: body, displayBody: body, metaElement: nil, metaForStore: nil)
+    }
+
+    public func sendQuestionReply(to bareJid: String, requestId: String, answers: [[String]]?, text: String? = nil, displayText: String) {
+        let envelope = SwitchQuestionReplyEnvelopeV1(version: 1, requestId: requestId, answers: answers, text: text)
+        let payloadData = try? JSONEncoder().encode(envelope)
+        let payloadJson = payloadData.flatMap { String(data: $0, encoding: .utf8) }
+
+        let meta = buildSwitchMetaElement(
+            type: "question-reply",
+            tool: "question",
+            attrs: [
+                "version": "1",
+                "request_id": requestId
+            ],
+            payloadJson: payloadJson
+        )
+
+        let metaForStore = MessageMeta(type: .questionReply, tool: "question", runStats: nil, requestId: requestId, question: nil)
+        sendWireMessage(to: bareJid, wireBody: displayText, displayBody: displayText, metaElement: meta, metaForStore: metaForStore)
     }
 
     public func sendSubagentWork(to subagentJid: String, taskId: String, parentJid: String, body: String) {
@@ -127,10 +192,10 @@ public final class XMPPService: ObservableObject {
         guard let encoded = SubagentWorkCodec.encode(envelope) else {
             return
         }
-        sendWireMessage(to: subagentJid, wireBody: encoded, displayBody: body)
+        sendWireMessage(to: subagentJid, wireBody: encoded, displayBody: body, metaElement: nil, metaForStore: nil)
     }
 
-    private func sendWireMessage(to bareJid: String, wireBody: String, displayBody: String) {
+    private func sendWireMessage(to bareJid: String, wireBody: String, displayBody: String, metaElement: Element?, metaForStore: MessageMeta?) {
         let to = BareJID(bareJid)
         let chat = messageModule.chatManager.createChat(for: client, with: to)
         guard let conversation = chat as? ConversationBase else {
@@ -138,9 +203,12 @@ public final class XMPPService: ObservableObject {
         }
         let id = UUID().uuidString
         let msg = conversation.createMessage(text: wireBody, id: id)
+        if let metaElement {
+            msg.element.addChild(metaElement)
+        }
         conversation.send(message: msg, completionHandler: nil)
 
-        chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, id: msg.id, timestamp: Date())
+        chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, id: msg.id, timestamp: Date(), meta: metaForStore)
     }
 
     public var pubSubItemsEvents: AnyPublisher<PubSubModule.ItemNotification, Never> {
