@@ -9,7 +9,7 @@ struct RootView: View {
             if let error = model.configError {
                 ConfigErrorView(error: error)
             } else if let directory = model.directory {
-                DirectoryShellView(directory: directory, xmpp: model.xmpp)
+                DirectoryShellView(directory: directory, xmpp: model.xmpp, chatStore: model.xmpp.chatStore)
             } else {
                 NoDirectoryView(statusText: model.xmpp.statusText)
             }
@@ -20,6 +20,7 @@ struct RootView: View {
 private struct DirectoryShellView: View {
     @ObservedObject var directory: SwitchDirectoryService
     @ObservedObject var xmpp: XMPPService
+    @ObservedObject var chatStore: ChatStore
     @State private var composerText: String = ""
 
     var body: some View {
@@ -33,7 +34,7 @@ private struct DirectoryShellView: View {
 
             ChatPane(
                 title: chatTitle(target: directory.chatTarget),
-                messages: directory.messagesForActiveChat(),
+                messages: messagesForActiveChat(),
                 composerText: $composerText,
                 onSend: {
                     let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -68,6 +69,16 @@ private struct DirectoryShellView: View {
         case .subagent(let jid):
             return "Subagent: \(jid)"
         }
+    }
+
+    private func messagesForActiveChat() -> [ChatMessage] {
+        guard let target = directory.chatTarget else { return [] }
+        let jid: String
+        switch target {
+        case .dispatcher(let j), .individual(let j), .subagent(let j):
+            jid = j
+        }
+        return chatStore.messages(for: jid)
     }
 }
 
@@ -201,9 +212,7 @@ private struct ChatPane: View {
                     Spacer(minLength: 32)
                 }
 
-                Text(msg.body)
-                    .font(.system(size: 13, weight: .regular, design: .default))
-                    .foregroundStyle(.primary)
+                MarkdownMessage(body: msg.body)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .background(bubbleColor)
@@ -226,6 +235,109 @@ private struct ChatPane: View {
                 return Color.accentColor.opacity(0.18)
             }
         }
+    }
+}
+
+private struct MarkdownMessage: View {
+    let body: String
+
+    var bodyView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(parseMarkdownBlocks(body), id: \.id) { block in
+                switch block.kind {
+                case .markdown(let s):
+                    markdownText(s)
+                case .code(let s, _):
+                    codeBlock(s)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    var body: some View {
+        bodyView
+            .textSelection(.enabled)
+    }
+
+    private func markdownText(_ s: String) -> some View {
+        let attr = (try? AttributedString(markdown: s)) ?? AttributedString(s)
+        return Text(attr)
+            .font(.system(size: 13, weight: .regular, design: .default))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func codeBlock(_ s: String) -> some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            Text(s)
+                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+        }
+        .background(Color.black.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private struct MarkdownBlock {
+        enum Kind {
+            case markdown(String)
+            case code(String, lang: String?)
+        }
+        let id: String
+        let kind: Kind
+    }
+
+    private func parseMarkdownBlocks(_ text: String) -> [MarkdownBlock] {
+        var blocks: [MarkdownBlock] = []
+        var current: [String] = []
+        var inCode = false
+        var codeLang: String? = nil
+
+        func flushMarkdown() {
+            let s = current.joined(separator: "\n")
+            current.removeAll(keepingCapacity: true)
+            if s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return
+            }
+            blocks.append(MarkdownBlock(id: UUID().uuidString, kind: .markdown(s)))
+        }
+
+        func flushCode() {
+            let s = current.joined(separator: "\n")
+            current.removeAll(keepingCapacity: true)
+            blocks.append(MarkdownBlock(id: UUID().uuidString, kind: .code(s, lang: codeLang)))
+            codeLang = nil
+        }
+
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if line.hasPrefix("```") {
+                if inCode {
+                    flushCode()
+                    inCode = false
+                } else {
+                    flushMarkdown()
+                    inCode = true
+                    let lang = line.dropFirst(3).trimmingCharacters(in: .whitespacesAndNewlines)
+                    codeLang = lang.isEmpty ? nil : lang
+                }
+                continue
+            }
+            current.append(line)
+        }
+
+        if inCode {
+            flushCode()
+        } else {
+            flushMarkdown()
+        }
+
+        if blocks.isEmpty {
+            blocks.append(MarkdownBlock(id: UUID().uuidString, kind: .markdown(text)))
+        }
+
+        return blocks
     }
 }
 
