@@ -1255,8 +1255,8 @@ private struct MarkdownMessage: View {
         // background to the padded content.
         for range in codeRanges.reversed() {
             let inner = AttributedString(result[range])
-            // Two spaces on each side reads better than one at this font size.
-            var padded = AttributedString("  ") + inner + AttributedString("  ")
+            // One space on each side; a good middle ground.
+            var padded = AttributedString(" ") + inner + AttributedString(" ")
             padded.backgroundColor = Color.accentColor.opacity(0.22)
             padded.foregroundColor = Color.white
             padded.font = .system(size: 12.75, weight: .medium, design: .monospaced)
