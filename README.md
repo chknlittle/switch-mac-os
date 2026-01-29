@@ -6,6 +6,10 @@
 
 A custom macOS XMPP client built with SwiftUI using the **Tigase Martin** library. It renders a 2-column directory (Dispatchers/Sessions) and keeps a chat panel always visible.
 
+## Screenshot
+
+![Switch screenshot](assets/switch-screenshot.png)
+
 ## Architecture
 
 ### Two-Column Directory + Always-Visible Chat
