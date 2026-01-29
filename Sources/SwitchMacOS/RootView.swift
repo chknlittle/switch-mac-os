@@ -1203,7 +1203,7 @@ private struct MarkdownMessage: View {
     var body: some View {
         let normalized = normalize(content)
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(parseMarkdownBlocks(normalized), id: \.id) { block in
                 switch block.kind {
                 case .markdown(let s):
@@ -1225,7 +1225,7 @@ private struct MarkdownMessage: View {
             .map { $0.trimmingCharacters(in: .init(charactersIn: "\n")) }
             .filter { !$0.isEmpty }
 
-        return VStack(alignment: .leading, spacing: 14) {
+        return VStack(alignment: .leading, spacing: 18) {
             ForEach(paragraphs.indices, id: \.self) { i in
                 let para = paragraphs[i]
                 if containsMarkdownSyntax(para) {
@@ -1251,10 +1251,13 @@ private struct MarkdownMessage: View {
         }
         // Apply styling to code ranges
         for range in codeRanges {
-            result[range].backgroundColor = Color.accentColor.opacity(0.25)
-            result[range].foregroundColor = Color.white
-            // Add slight letter spacing for breathing room
-            result[range].kern = 0.3
+            // Background pills would look nicer with padding, but SwiftUI's
+            // AttributedString background has no padding/rounded corners and can
+            // feel cramped. Prefer a calmer "Jobs/Ive" style: typographic emphasis.
+            result[range].backgroundColor = Color.clear
+            result[range].foregroundColor = Color.accentColor
+            result[range].font = .system(size: 12.75, weight: .medium, design: .monospaced)
+            result[range].kern = 0
         }
         return result
     }
@@ -1265,7 +1268,7 @@ private struct MarkdownMessage: View {
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
-            .lineSpacing(6)
+            .lineSpacing(7)
     }
 
     private func containsMarkdownSyntax(_ s: String) -> Bool {
