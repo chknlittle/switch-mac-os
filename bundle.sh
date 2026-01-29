@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUNDLE_DIR=".build/${APP_NAME}.app"
 CONTENTS="${BUNDLE_DIR}/Contents"
 MACOS="${CONTENTS}/MacOS"
+RESOURCES="${CONTENTS}/Resources"
 
 # Build
 swift build
@@ -15,16 +16,18 @@ swift build
 rm -rf "${BUNDLE_DIR}"
 mkdir -p "${MACOS}"
 
-# Copy real binary
-cp .build/debug/"${APP_NAME}" "${MACOS}/${APP_NAME}-bin"
+# Optional bundle resources
+mkdir -p "${RESOURCES}"
 
-# Write launcher script that sets the working directory to the repo root
-cat > "${MACOS}/${APP_NAME}" <<LAUNCHER
-#!/bin/bash
-cd "${REPO_ROOT}"
-exec "\$(dirname "\$0")/${APP_NAME}-bin" "\$@"
-LAUNCHER
-chmod +x "${MACOS}/${APP_NAME}"
+# Copy real binary as the bundle executable.
+# Keep the CFBundleExecutable as a Mach-O binary (not a shell script) so macOS
+# treats the process as a real app for things like notifications.
+cp ".build/debug/${APP_NAME}" "${MACOS}/${APP_NAME}"
+
+# If a repo-root .env exists, bundle it for convenient local dev.
+if [ -f "${REPO_ROOT}/.env" ]; then
+  cp "${REPO_ROOT}/.env" "${RESOURCES}/.env"
+fi
 
 # Write Info.plist
 cat > "${CONTENTS}/Info.plist" <<PLIST

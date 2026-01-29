@@ -85,11 +85,24 @@ public enum EnvLoader {
 
     public static func loadMergedEnv() -> [String: String] {
         var merged = ProcessInfo.processInfo.environment
-        if let dotEnv = try? readDotEnv(at: FileManager.default.currentDirectoryPath + "/.env") {
-            for (k, v) in dotEnv {
-                merged[k] = v
-            }
+
+        // Lowest precedence: bundle Resources/.env (used by ./bundle.sh for local dev)
+        if let resources = Bundle.main.resourceURL?.path,
+           let dotEnv = try? readDotEnv(at: resources + "/.env") {
+            for (k, v) in dotEnv { merged[k] = v }
         }
+
+        // Next: current working directory .env (CLI + repo-root dev)
+        if let dotEnv = try? readDotEnv(at: FileManager.default.currentDirectoryPath + "/.env") {
+            for (k, v) in dotEnv { merged[k] = v }
+        }
+
+        // Highest precedence: explicit path override
+        if let path = ProcessInfo.processInfo.environment["SWITCH_DOTENV_PATH"],
+           let dotEnv = try? readDotEnv(at: path) {
+            for (k, v) in dotEnv { merged[k] = v }
+        }
+
         return merged
     }
 
