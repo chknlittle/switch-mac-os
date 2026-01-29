@@ -1022,7 +1022,26 @@ private final class SubmitTextView: NSTextView {
                 return
             }
         }
+
+        // NSImage(pasteboard:) only supports a limited set of pasteboard formats
+        // (notably TIFF/PDF). Screenshots are sometimes copied as PNG, so fall back
+        // to reading common image data types directly.
         if let img = NSImage(pasteboard: pb) {
+            onPasteImage?(img)
+            return
+        }
+        let candidates: [NSPasteboard.PasteboardType] = [
+            .png,
+            .tiff,
+            NSPasteboard.PasteboardType("public.jpeg"),
+            NSPasteboard.PasteboardType("public.heic"),
+            NSPasteboard.PasteboardType("public.heif"),
+            NSPasteboard.PasteboardType("public.gif")
+        ]
+        if let t = pb.availableType(from: candidates),
+           let data = pb.data(forType: t),
+           let img = NSImage(data: data)
+        {
             onPasteImage?(img)
             return
         }
