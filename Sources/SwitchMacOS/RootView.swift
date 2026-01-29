@@ -1052,8 +1052,9 @@ private final class SubmitTextView: NSTextView {
             return
         }
 
-        // Some clipboard images (including screenshots) are easier to decode via bitmap reps.
-        if let rep = NSBitmapImageRep(pasteboard: pb) {
+        // Some clipboard images (including screenshots) are easiest to decode from raw raster
+        // representations (commonly TIFF on macOS).
+        if let tiff = pb.data(forType: .tiff), let rep = NSBitmapImageRep(data: tiff) {
             let img = NSImage(size: rep.size)
             img.addRepresentation(rep)
             onPasteImage?(img)
