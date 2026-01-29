@@ -1203,21 +1203,28 @@ private struct MarkdownMessage: View {
     var body: some View {
         let normalized = normalize(content)
 
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(parseMarkdownBlocks(normalized), id: \.id) { block in
-                switch block.kind {
-                case .markdown(let s):
-                    markdownText(s)
-                case .code(let s, _):
-                    codeBlock(s)
-                }
+        // Render as a single Text view so selection can span paragraphs and code blocks.
+        // SwiftUI text selection does not extend across multiple Text views.
+        let blocks = parseMarkdownBlocks(normalized)
+        var combined = Text("")
+        for i in blocks.indices {
+            let block = blocks[i]
+            switch block.kind {
+            case .markdown(let s):
+                combined = combined + markdownText(s)
+            case .code(let s, _):
+                combined = combined + codeBlockText(s)
+            }
+            if i != blocks.indices.last {
+                combined = combined + Text("\n\n")
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .textSelection(.enabled)
+        return messageText(combined)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
     }
 
-    private func markdownText(_ s: String) -> some View {
+    private func markdownText(_ s: String) -> Text {
         // Split on \n\n for paragraph breaks, then render each paragraph
         // separately so spacing is controlled by the VStack, not by the
         // markdown parser (which collapses single \n into spaces).
@@ -1225,8 +1232,6 @@ private struct MarkdownMessage: View {
             .map { $0.trimmingCharacters(in: .init(charactersIn: "\n")) }
             .filter { !$0.isEmpty }
 
-        // Render as a single Text so selection can span multiple paragraphs.
-        // SwiftUI text selection does not extend across multiple Text views.
         var combined = Text("")
         for i in paragraphs.indices {
             let para = paragraphs[i]
@@ -1242,7 +1247,27 @@ private struct MarkdownMessage: View {
                 combined = combined + Text("\n\n")
             }
         }
-        return messageText(combined)
+        return combined
+    }
+
+    private func codeBlockText(_ s: String) -> Text {
+        // Use an attributed-string fallback for code blocks so selection can span across
+        // the whole message. We can't get proper padding/rounded corners like a SwiftUI
+        // container, so we fake padding by adding spaces on each line.
+        let lines = s.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var out = AttributedString("")
+        for i in lines.indices {
+            let raw = lines[i]
+            var line = AttributedString("  \(raw)  ")
+            line.font = .system(size: 12.5, weight: .regular, design: .monospaced)
+            line.foregroundColor = Color.primary
+            line.backgroundColor = Color.black.opacity(0.06)
+            out += line
+            if i != lines.indices.last {
+                out += AttributedString("\n")
+            }
+        }
+        return Text(out)
     }
 
     private func styleInlineCode(_ input: AttributedString) -> AttributedString {
@@ -1307,18 +1332,6 @@ private struct MarkdownMessage: View {
             .replacingOccurrences(of: "\r", with: "\n")
             .replacingOccurrences(of: "\u{2028}", with: "\n")
             .replacingOccurrences(of: "\u{2029}", with: "\n")
-    }
-
-    private func codeBlock(_ s: String) -> some View {
-        Text(s)
-            .font(.system(size: 12.5, weight: .regular, design: .monospaced))
-            .foregroundStyle(.primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .lineSpacing(3)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(10)
-            .background(Color.black.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private struct MarkdownBlock {
