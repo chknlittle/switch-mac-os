@@ -1225,19 +1225,24 @@ private struct MarkdownMessage: View {
             .map { $0.trimmingCharacters(in: .init(charactersIn: "\n")) }
             .filter { !$0.isEmpty }
 
-        return VStack(alignment: .leading, spacing: 18) {
-            ForEach(paragraphs.indices, id: \.self) { i in
-                let para = paragraphs[i]
-                if containsMarkdownSyntax(para) {
-                    // For lines within a paragraph, convert \n to hard breaks.
-                    let hardBreaks = para.replacingOccurrences(of: "\n", with: "  \n")
-                    let attr = styleInlineCode((try? AttributedString(markdown: hardBreaks)) ?? AttributedString(para))
-                    messageText(Text(attr))
-                } else {
-                    messageText(Text(verbatim: para))
-                }
+        // Render as a single Text so selection can span multiple paragraphs.
+        // SwiftUI text selection does not extend across multiple Text views.
+        var combined = Text("")
+        for i in paragraphs.indices {
+            let para = paragraphs[i]
+            if containsMarkdownSyntax(para) {
+                // For lines within a paragraph, convert \n to hard breaks.
+                let hardBreaks = para.replacingOccurrences(of: "\n", with: "  \n")
+                let attr = styleInlineCode((try? AttributedString(markdown: hardBreaks)) ?? AttributedString(para))
+                combined = combined + Text(attr)
+            } else {
+                combined = combined + Text(verbatim: para)
+            }
+            if i != paragraphs.indices.last {
+                combined = combined + Text("\n\n")
             }
         }
+        return messageText(combined)
     }
 
     private func styleInlineCode(_ input: AttributedString) -> AttributedString {
