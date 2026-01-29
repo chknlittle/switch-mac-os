@@ -1249,15 +1249,18 @@ private struct MarkdownMessage: View {
                 codeRanges.append(run.range)
             }
         }
-        // Apply styling to code ranges
-        for range in codeRanges {
-            // Background pills would look nicer with padding, but SwiftUI's
-            // AttributedString background has no padding/rounded corners and can
-            // feel cramped. Prefer a calmer "Jobs/Ive" style: typographic emphasis.
-            result[range].backgroundColor = Color.clear
-            result[range].foregroundColor = Color.accentColor
-            result[range].font = .system(size: 12.75, weight: .medium, design: .monospaced)
-            result[range].kern = 0
+        // Apply styling to code ranges.
+        // NOTE: AttributedString's background has no padding or rounded corners.
+        // To create readable "pills", we wrap the span with spaces and apply the
+        // background to the padded content.
+        for range in codeRanges.reversed() {
+            let inner = AttributedString(result[range])
+            var padded = AttributedString(" ") + inner + AttributedString(" ")
+            padded.backgroundColor = Color.accentColor.opacity(0.22)
+            padded.foregroundColor = Color.white
+            padded.font = .system(size: 12.75, weight: .medium, design: .monospaced)
+            padded.kern = 0
+            result.replaceSubrange(range, with: padded)
         }
         return result
     }
