@@ -126,6 +126,7 @@ public final class ChatStore: ObservableObject {
     @Published public private(set) var threads: [String: [ChatMessage]] = [:]
 
     public let liveIncomingMessage = PassthroughSubject<ChatMessage, Never>()
+    public let liveOutgoingMessage = PassthroughSubject<ChatMessage, Never>()
 
     public init() {}
 
@@ -148,17 +149,19 @@ public final class ChatStore: ObservableObject {
         }
     }
 
-    public func appendOutgoing(threadJid: String, body: String, id: String?, timestamp: Date, meta: MessageMeta? = nil) {
-        appendIfMissing(
-            ChatMessage(
-                id: id ?? UUID().uuidString,
-                threadJid: threadJid,
-                direction: .outgoing,
-                body: body,
-                timestamp: timestamp,
-                meta: meta
-            )
+    public func appendOutgoing(threadJid: String, body: String, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
+        let msg = ChatMessage(
+            id: id ?? UUID().uuidString,
+            threadJid: threadJid,
+            direction: .outgoing,
+            body: body,
+            timestamp: timestamp,
+            meta: meta
         )
+        let inserted = appendIfMissing(msg)
+        if inserted && !isArchived {
+            liveOutgoingMessage.send(msg)
+        }
     }
 
     @discardableResult

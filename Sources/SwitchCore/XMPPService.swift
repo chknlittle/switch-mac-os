@@ -502,7 +502,7 @@ public final class XMPPService: ObservableObject {
                 case .incoming:
                     self.chatStore.appendIncoming(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
                 case .outgoing:
-                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp, meta: meta)
+                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
                 }
             }
             .store(in: &cancellables)
