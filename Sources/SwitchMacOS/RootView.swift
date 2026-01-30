@@ -1244,8 +1244,8 @@ private struct MarkdownMessage: View {
             } else {
                 // Preserve literal layout (lists/quotes/headings/newlines) instead of letting the
                 // markdown pipeline collapse block separators.
-                if para.contains("`") {
-                    combined = combined + Text(styleBacktickedCode(para))
+                if para.contains("`") || para.contains("**") || para.contains("__") {
+                    combined = combined + Text(styleVerbatimInlineMarkup(para))
                 } else {
                     combined = combined + Text(verbatim: para)
                 }
@@ -1267,32 +1267,79 @@ private struct MarkdownMessage: View {
         return padded
     }
 
-    private func styleBacktickedCode(_ s: String) -> AttributedString {
-        // Apply inline-code styling for backtick-delimited spans, while keeping the
-        // rest of the text verbatim so newlines/bullets remain intact.
+    private func makeBoldSpan(_ s: String) -> AttributedString {
+        var out = AttributedString(s)
+        // Keep weight consistent with the surrounding message font.
+        out.font = .system(size: 13.5, weight: .semibold, design: .rounded)
+        return out
+    }
+
+    private func styleVerbatimInlineMarkup(_ s: String) -> AttributedString {
+        // Render a subset of markdown inline markup while keeping the text verbatim:
+        // - `inline code`
+        // - **bold** / __bold__
+        // This avoids SwiftUI's markdown block rendering which can collapse newlines.
         var out = AttributedString("")
         var idx = s.startIndex
 
-        while let open = s[idx...].firstIndex(of: "`") {
-            if open > idx {
-                out += AttributedString(String(s[idx..<open]))
+        func appendLiteral(_ start: String.Index, _ end: String.Index) {
+            if end > start {
+                out += AttributedString(String(s[start..<end]))
+            }
+        }
+
+        while idx < s.endIndex {
+            let nextBacktick = s[idx...].firstIndex(of: "`")
+            let nextBoldA = s[idx...].range(of: "**")?.lowerBound
+            let nextBoldB = s[idx...].range(of: "__")?.lowerBound
+
+            // Pick earliest delimiter.
+            var next = nextBacktick
+            var kind: String = "code"
+            if let a = nextBoldA {
+                if next == nil || a < next! {
+                    next = a
+                    kind = "bold**"
+                }
+            }
+            if let b = nextBoldB {
+                if next == nil || b < next! {
+                    next = b
+                    kind = "bold__"
+                }
             }
 
-            let afterOpen = s.index(after: open)
-            guard let close = s[afterOpen...].firstIndex(of: "`") else {
-                // Unmatched backtick; treat literally.
-                out += AttributedString("`")
-                idx = afterOpen
+            guard let open = next else {
+                appendLiteral(idx, s.endIndex)
+                break
+            }
+
+            appendLiteral(idx, open)
+
+            if kind == "code" {
+                let afterOpen = s.index(after: open)
+                guard let close = s[afterOpen...].firstIndex(of: "`") else {
+                    out += AttributedString("`")
+                    idx = afterOpen
+                    continue
+                }
+                let code = String(s[afterOpen..<close])
+                out += makeInlineCodeSpan(code)
+                idx = s.index(after: close)
                 continue
             }
 
-            let code = String(s[afterOpen..<close])
-            out += makeInlineCodeSpan(code)
-            idx = s.index(after: close)
-        }
+            let delim = (kind == "bold__") ? "__" : "**"
+            let afterDelim = s.index(open, offsetBy: 2)
+            guard let closeRange = s[afterDelim...].range(of: delim) else {
+                out += AttributedString(delim)
+                idx = afterDelim
+                continue
+            }
 
-        if idx < s.endIndex {
-            out += AttributedString(String(s[idx...]))
+            let inner = String(s[afterDelim..<closeRange.lowerBound])
+            out += makeBoldSpan(inner)
+            idx = closeRange.upperBound
         }
 
         return out
