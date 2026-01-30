@@ -1259,12 +1259,12 @@ private struct MarkdownMessage: View {
 
     private func makeInlineCodeSpan(_ s: String) -> AttributedString {
         // Match the same "pill" styling used by `styleInlineCode`.
-        var padded = AttributedString(" ") + AttributedString(s) + AttributedString(" ")
-        padded.backgroundColor = Color.accentColor.opacity(0.22)
-        padded.foregroundColor = Color.white
-        padded.font = .system(size: 12.75, weight: .medium, design: .monospaced)
-        padded.kern = 0
-        return padded
+        var out = AttributedString(s)
+        out.backgroundColor = Color.accentColor.opacity(0.22)
+        out.foregroundColor = Color.white
+        out.font = .system(size: 12.75, weight: .medium, design: .monospaced)
+        out.kern = 0
+        return out
     }
 
     private func makeBoldSpan(_ s: String) -> AttributedString {
@@ -1425,13 +1425,13 @@ private struct MarkdownMessage: View {
         // background to the padded content.
         for range in codeRanges.reversed() {
             let inner = AttributedString(result[range])
-            // One space on each side; a good middle ground.
-            var padded = AttributedString(" ") + inner + AttributedString(" ")
-            padded.backgroundColor = Color.accentColor.opacity(0.22)
-            padded.foregroundColor = Color.white
-            padded.font = .system(size: 12.75, weight: .medium, design: .monospaced)
-            padded.kern = 0
-            result.replaceSubrange(range, with: padded)
+            // Keep padding minimal (selection-friendly) while still visually distinct.
+            var styled = inner
+            styled.backgroundColor = Color.accentColor.opacity(0.22)
+            styled.foregroundColor = Color.white
+            styled.font = .system(size: 12.75, weight: .medium, design: .monospaced)
+            styled.kern = 0
+            result.replaceSubrange(range, with: styled)
         }
         return result
     }
