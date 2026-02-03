@@ -54,6 +54,12 @@ private struct DirectoryShellView: View {
                     items: directory.dispatchers,
                     selectedJid: directory.selectedDispatcherJid,
                     composingJids: directory.dispatchersWithComposingSessions,
+                    avatarData: { item in
+                        xmpp.avatarDataByJid[item.jid]
+                    },
+                    onItemAppear: { item in
+                        xmpp.ensureAvatarLoaded(for: item.jid)
+                    },
                     unreadCount: { item in
                         directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
                     }
@@ -207,6 +213,8 @@ private struct ColumnList: View {
     let items: [DirectoryItem]
     let selectedJid: String?
     let composingJids: Set<String>
+    let avatarData: ((DirectoryItem) -> Data?)?
+    let onItemAppear: ((DirectoryItem) -> Void)?
     let unreadCount: (DirectoryItem) -> Int
     let onSelect: (DirectoryItem) -> Void
 
@@ -215,6 +223,8 @@ private struct ColumnList: View {
         items: [DirectoryItem],
         selectedJid: String?,
         composingJids: Set<String>,
+        avatarData: ((DirectoryItem) -> Data?)? = nil,
+        onItemAppear: ((DirectoryItem) -> Void)? = nil,
         unreadCount: @escaping (DirectoryItem) -> Int = { _ in 0 },
         onSelect: @escaping (DirectoryItem) -> Void
     ) {
@@ -222,6 +232,8 @@ private struct ColumnList: View {
         self.items = items
         self.selectedJid = selectedJid
         self.composingJids = composingJids
+        self.avatarData = avatarData
+        self.onItemAppear = onItemAppear
         self.unreadCount = unreadCount
         self.onSelect = onSelect
     }
@@ -246,10 +258,13 @@ private struct ColumnList: View {
                     item: item,
                     isSelected: isSelected(item),
                     isComposing: composingJids.contains(item.jid),
-                    unreadCount: unreadCount(item)
+                    unreadCount: unreadCount(item),
+                    showAvatar: avatarData != nil,
+                    avatarData: avatarData?(item)
                 )
                     .contentShape(Rectangle())
                     .onTapGesture { onSelect(item) }
+                    .onAppear { onItemAppear?(item) }
                     .listRowSeparator(.hidden)
                     .listRowBackground(isSelected(item) ? Color.accentColor.opacity(0.16) : Color.clear)
             }
@@ -266,9 +281,14 @@ private struct ColumnList: View {
         let isSelected: Bool
         let isComposing: Bool
         let unreadCount: Int
+        let showAvatar: Bool
+        let avatarData: Data?
 
         var body: some View {
             HStack(spacing: 8) {
+                if showAvatar {
+                    AvatarCircle(imageData: avatarData, fallbackText: item.name)
+                }
                 Text(item.name)
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -283,6 +303,47 @@ private struct ColumnList: View {
             }
             .padding(.vertical, 6)
         }
+    }
+}
+
+private struct AvatarCircle: View {
+    let imageData: Data?
+    let fallbackText: String
+
+    private var fallbackInitial: String {
+        let trimmed = fallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let first = trimmed.first {
+            return String(first).uppercased()
+        }
+        return "?"
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [Color.accentColor.opacity(0.22), Color.secondary.opacity(0.18)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            if let imageData, let nsImage = NSImage(data: imageData) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Text(fallbackInitial)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 22, height: 22)
+        .clipShape(Circle())
+        .overlay(
+            Circle().stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+        )
     }
 }
 

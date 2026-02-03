@@ -200,6 +200,10 @@ public final class XMPPService: ObservableObject {
     public let client = XMPPClient()
     private let debugLogger = DebugStreamLogger()
 
+    /// Avatar image bytes keyed by bare JID (XEP-0084 PEP user avatar)
+    @Published public private(set) var avatarDataByJid: [String: Data] = [:]
+    private var avatarLoadingJids: Set<String> = []
+
     @Published public private(set) var status: Status = .disconnected
     @Published public private(set) var statusText: String = "Disconnected"
 
@@ -208,6 +212,8 @@ public final class XMPPService: ObservableObject {
     private let mamModule: MessageArchiveManagementModule
     private let chatStateModule: ChatStateNotificationsModule
     private let httpUploadModule: HttpFileUploadModule
+    private let pepUserAvatarModule: PEPUserAvatarModule
+    private let vcardTempModule: VCardTempModule
     private var cancellables: Set<AnyCancellable> = []
 
     private var mamQueryToThread: [String: String] = [:]
@@ -226,9 +232,59 @@ public final class XMPPService: ObservableObject {
         self.mamModule = MessageArchiveManagementModule()
         self.chatStateModule = ChatStateNotificationsModule()
         self.httpUploadModule = HttpFileUploadModule()
+        self.pepUserAvatarModule = PEPUserAvatarModule()
+        self.vcardTempModule = VCardTempModule()
 
         registerDefaultModules()
         bindPublishers()
+    }
+
+    public func ensureAvatarLoaded(for bareJid: String) {
+        let jid = bareJid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !jid.isEmpty else { return }
+        if avatarDataByJid[jid] != nil { return }
+        if avatarLoadingJids.contains(jid) { return }
+        avatarLoadingJids.insert(jid)
+
+        pepUserAvatarModule.retrieveAvatarMetadata(from: BareJID(jid), itemId: nil, fireEvents: false) { [weak self] metaResult in
+            guard let self else { return }
+            switch metaResult {
+            case .success(let info):
+                self.pepUserAvatarModule.retrieveAvatar(from: BareJID(jid), itemId: info.id) { [weak self] dataResult in
+                    guard let self else { return }
+                    Task { @MainActor in
+                        defer { self.avatarLoadingJids.remove(jid) }
+                        switch dataResult {
+                        case .success((_, let data)):
+                            self.avatarDataByJid[jid] = data
+                        case .failure:
+                            // Fallback: servers may only provide vCard-based photos.
+                            self.loadVCardTempAvatarIfPresent(for: jid)
+                        }
+                    }
+                }
+            case .failure:
+                // Fallback: servers may only provide vCard-based photos.
+                self.loadVCardTempAvatarIfPresent(for: jid)
+            }
+        }
+    }
+
+    private func loadVCardTempAvatarIfPresent(for bareJid: String) {
+        let jid = bareJid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !jid.isEmpty else { return }
+
+        vcardTempModule.retrieveVCard(from: JID(jid)) { [weak self] result in
+            guard let self else { return }
+            Task { @MainActor in
+                defer { self.avatarLoadingJids.remove(jid) }
+                guard case .success(let vcard) = result else { return }
+                guard let photo = vcard.photos.first(where: { ($0.binval ?? "").isEmpty == false }) else { return }
+                guard let binval = photo.binval else { return }
+                guard let data = Data(base64Encoded: binval, options: [.ignoreUnknownCharacters]) else { return }
+                self.avatarDataByJid[jid] = data
+            }
+        }
     }
 
     public func connect(using config: AppConfig) {
@@ -410,6 +466,8 @@ public final class XMPPService: ObservableObject {
         client.modulesManager.register(pubSubModule)
         client.modulesManager.register(chatStateModule)
         client.modulesManager.register(httpUploadModule)
+        client.modulesManager.register(pepUserAvatarModule)
+        client.modulesManager.register(vcardTempModule)
     }
 
     private func pickUploadComponent(for byteCount: Int) async throws -> HttpFileUploadModule.UploadComponent {
@@ -457,6 +515,17 @@ public final class XMPPService: ObservableObject {
                 } else {
                     self.statusText = String(describing: state)
                 }
+            }
+            .store(in: &cancellables)
+
+        pepUserAvatarModule.avatarChangePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] change in
+                guard let self else { return }
+                let bare = change.jid.bareJid.stringValue
+                // Force a refresh; the cached bytes may now be stale.
+                self.avatarDataByJid[bare] = nil
+                self.ensureAvatarLoaded(for: bare)
             }
             .store(in: &cancellables)
 
