@@ -8,6 +8,7 @@ BUNDLE_DIR=".build/${APP_NAME}.app"
 CONTENTS="${BUNDLE_DIR}/Contents"
 MACOS="${CONTENTS}/MacOS"
 RESOURCES="${CONTENTS}/Resources"
+ENTITLEMENTS="${REPO_ROOT}/SwitchMacOS.entitlements"
 
 # Build
 swift build
@@ -76,7 +77,11 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# Ad-hoc code sign the app bundle with entitlements.
+# This is required for notifications to work on macOS.
+codesign --force --deep --sign - --entitlements "${ENTITLEMENTS}" "${BUNDLE_DIR}"
+
 # Symlink to Applications for Spotlight
 ln -sfh "${REPO_ROOT}/${BUNDLE_DIR}" "/Applications/${APP_NAME}.app"
 
-echo "Built ${BUNDLE_DIR} (symlinked to /Applications)"
+echo "Built and signed ${BUNDLE_DIR} (symlinked to /Applications)"

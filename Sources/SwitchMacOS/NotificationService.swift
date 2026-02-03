@@ -1,7 +1,10 @@
 import AppKit
 import Combine
+import os.log
 import SwitchCore
 import UserNotifications
+
+private let logger = Logger(subsystem: "com.switch.macos", category: "notifications")
 
 @MainActor
 final class NotificationService: NSObject, ObservableObject {
@@ -27,23 +30,37 @@ final class NotificationService: NSObject, ObservableObject {
 
         // UNUserNotificationCenter requires a proper .app bundle with a bundle identifier.
         // When running as a bare executable (e.g. via `swift build`), skip system notification setup.
-        guard Bundle.main.bundleIdentifier != nil else {
+        guard let bundleId = Bundle.main.bundleIdentifier else {
+            logger.warning("No bundle identifier - notifications disabled")
             notificationsAvailable = false
             return
         }
 
+        logger.info("Setting up notifications for bundle: \(bundleId)")
         notificationsAvailable = true
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if let error = error {
+                logger.error("Notification authorization error: \(error.localizedDescription)")
+            } else {
+                logger.info("Notification authorization granted: \(granted)")
+            }
+        }
     }
 
     private func handleIncoming(_ message: ChatMessage) {
+        logger.debug("Received incoming message from \(message.threadJid)")
+
         if NSApplication.shared.isActive, isActiveChatThread(message.threadJid) {
+            logger.debug("Skipping notification - chat is active")
             return
         }
 
-        guard notificationsAvailable else { return }
+        guard notificationsAvailable else {
+            logger.warning("Notifications not available - skipping")
+            return
+        }
 
         let content = UNMutableNotificationContent()
         content.title = localPart(of: message.threadJid)
@@ -56,7 +73,14 @@ final class NotificationService: NSObject, ObservableObject {
             trigger: nil
         )
 
-        UNUserNotificationCenter.current().add(request)
+        logger.info("Posting notification: \(content.title)")
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                logger.error("Failed to add notification: \(error.localizedDescription)")
+            } else {
+                logger.info("Notification posted successfully")
+            }
+        }
         incrementBadge()
     }
 
