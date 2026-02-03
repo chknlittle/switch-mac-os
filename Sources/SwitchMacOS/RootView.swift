@@ -30,7 +30,7 @@ private struct DirectoryShellView: View {
     @ObservedObject var xmpp: XMPPService
     @ObservedObject var chatStore: ChatStore
     let pinnedChats: [PinnedChat]
-    @State private var composerText: String = ""
+    @StateObject private var drafts = ComposerDraftStore()
     @State private var pendingImage: PendingImageAttachment? = nil
 
     var body: some View {
@@ -43,10 +43,12 @@ private struct DirectoryShellView: View {
                 threadJid: directory.chatTarget?.jid,
                 messages: messagesForActiveChat(),
                 xmpp: xmpp,
-                composerText: $composerText,
+                composerText: composerBinding,
                 pendingImage: $pendingImage,
                 onSend: {
-                    let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let jid = directory.chatTarget?.jid else { return }
+                    let raw = drafts.draft(for: jid)
+                    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                     if let pending = pendingImage {
                         directory.sendImageAttachment(
                             data: pending.data,
@@ -55,12 +57,12 @@ private struct DirectoryShellView: View {
                             caption: trimmed.isEmpty ? nil : trimmed
                         )
                         pendingImage = nil
-                        composerText = ""
+                        drafts.setDraft("", for: jid)
                         return
                     }
                     guard !trimmed.isEmpty else { return }
                     directory.sendChat(body: trimmed)
-                    composerText = ""
+                    drafts.setDraft("", for: jid)
                 },
                 isEnabled: directory.chatTarget != nil,
                 isTyping: isChatTargetTyping
@@ -71,6 +73,9 @@ private struct DirectoryShellView: View {
         }
         .onChange(of: directory.chatTarget?.jid) { newValue in
             chatStore.setActiveThread(newValue)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            drafts.flush()
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -106,6 +111,19 @@ private struct DirectoryShellView: View {
     private var isChatTargetTyping: Bool {
         guard let target = directory.chatTarget else { return false }
         return xmpp.composingJids.contains(target.jid)
+    }
+
+    private var composerBinding: Binding<String> {
+        Binding(
+            get: {
+                guard let jid = directory.chatTarget?.jid else { return "" }
+                return drafts.draft(for: jid)
+            },
+            set: { newValue in
+                guard let jid = directory.chatTarget?.jid else { return }
+                drafts.setDraft(newValue, for: jid)
+            }
+        )
     }
 }
 
