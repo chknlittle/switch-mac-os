@@ -35,52 +35,8 @@ private struct DirectoryShellView: View {
 
     var body: some View {
         HSplitView {
-            VStack(spacing: 0) {
-                if let acornJid {
-                    PinnedChatSection(
-                        title: "Acorn",
-                        name: "acorn",
-                        jid: acornJid,
-                        isSelected: directory.chatTarget?.jid == acornJid,
-                        isComposing: xmpp.composingJids.contains(acornJid),
-                        unreadCount: chatStore.unreadCount(for: acornJid)
-                    ) {
-                        directory.openPinnedChat(jid: acornJid)
-                    }
-                }
-
-                ColumnList(
-                    title: "Dispatchers",
-                    items: directory.dispatchers,
-                    selectedJid: directory.selectedDispatcherJid,
-                    composingJids: directory.dispatchersWithComposingSessions,
-                    avatarData: { item in
-                        xmpp.avatarDataByJid[item.jid]
-                    },
-                    onItemAppear: { item in
-                        xmpp.ensureAvatarLoaded(for: item.jid)
-                    },
-                    unreadCount: { item in
-                        directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
-                    }
-                ) { item in
-                    directory.selectDispatcher(item)
-                }
-            }
-            .frame(minWidth: 180)
-
-            ColumnList(
-                title: "Sessions",
-                items: directory.individuals,
-                selectedJid: directory.selectedSessionJid,
-                composingJids: xmpp.composingJids,
-                unreadCount: { item in
-                    chatStore.unreadCount(for: item.jid)
-                }
-            ) { item in
-                directory.selectIndividual(item)
-            }
-            .frame(minWidth: 180)
+            SidebarList(directory: directory, xmpp: xmpp, chatStore: chatStore, acornJid: acornJid)
+                .frame(minWidth: 240)
 
             ChatPane(
                 title: chatTitle,
@@ -153,156 +109,129 @@ private struct DirectoryShellView: View {
     }
 }
 
-private struct PinnedChatSection: View {
-    let title: String
-    let name: String
-    let jid: String
-    let isSelected: Bool
-    let isComposing: Bool
-    let unreadCount: Int
-    let onOpen: () -> Void
+private struct SidebarList: View {
+    @ObservedObject var directory: SwitchDirectoryService
+    @ObservedObject var xmpp: XMPPService
+    @ObservedObject var chatStore: ChatStore
+    let acornJid: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-
-            Divider()
-
-            Button(action: onOpen) {
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(name)
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .lineLimit(1)
-                        Text(jid)
-                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    if isComposing {
-                        ProgressView()
-                            .scaleEffect(0.5)
-                            .frame(width: 16, height: 16)
-                    }
-                    if unreadCount > 0 {
-                        UnreadBadge(count: unreadCount)
+        List {
+            if let acornJid {
+                Section(header: SidebarSectionHeader(title: "Acorn", count: nil)) {
+                    SidebarRow(
+                        title: "acorn",
+                        subtitle: acornJid,
+                        showAvatar: false,
+                        avatarData: nil,
+                        isSelected: directory.chatTarget?.jid == acornJid,
+                        isComposing: xmpp.composingJids.contains(acornJid),
+                        unreadCount: chatStore.unreadCount(for: acornJid)
+                    ) {
+                        directory.openPinnedChat(jid: acornJid)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(isSelected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 10)
+
+            Section(header: SidebarSectionHeader(title: "Dispatchers", count: directory.dispatchers.count)) {
+                ForEach(directory.dispatchers) { item in
+                    SidebarRow(
+                        title: item.name,
+                        subtitle: nil,
+                        showAvatar: true,
+                        avatarData: xmpp.avatarDataByJid[item.jid],
+                        isSelected: directory.selectedDispatcherJid == item.jid,
+                        isComposing: directory.dispatchersWithComposingSessions.contains(item.jid),
+                        unreadCount: directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
+                    ) {
+                        directory.selectDispatcher(item)
+                    }
+                    .onAppear {
+                        xmpp.ensureAvatarLoaded(for: item.jid)
+                    }
+                }
+            }
+
+            Section(header: SidebarSectionHeader(title: "Sessions", count: directory.individuals.count)) {
+                ForEach(directory.individuals) { item in
+                    SidebarRow(
+                        title: item.name,
+                        subtitle: nil,
+                        showAvatar: false,
+                        avatarData: nil,
+                        isSelected: directory.selectedSessionJid == item.jid,
+                        isComposing: xmpp.composingJids.contains(item.jid),
+                        unreadCount: chatStore.unreadCount(for: item.jid)
+                    ) {
+                        directory.selectIndividual(item)
+                    }
+                }
+            }
         }
+        .listStyle(.inset)
     }
 }
 
-private struct ColumnList: View {
+private struct SidebarSectionHeader: View {
     let title: String
-    let items: [DirectoryItem]
-    let selectedJid: String?
-    let composingJids: Set<String>
-    let avatarData: ((DirectoryItem) -> Data?)?
-    let onItemAppear: ((DirectoryItem) -> Void)?
-    let unreadCount: (DirectoryItem) -> Int
-    let onSelect: (DirectoryItem) -> Void
-
-    init(
-        title: String,
-        items: [DirectoryItem],
-        selectedJid: String?,
-        composingJids: Set<String>,
-        avatarData: ((DirectoryItem) -> Data?)? = nil,
-        onItemAppear: ((DirectoryItem) -> Void)? = nil,
-        unreadCount: @escaping (DirectoryItem) -> Int = { _ in 0 },
-        onSelect: @escaping (DirectoryItem) -> Void
-    ) {
-        self.title = title
-        self.items = items
-        self.selectedJid = selectedJid
-        self.composingJids = composingJids
-        self.avatarData = avatarData
-        self.onItemAppear = onItemAppear
-        self.unreadCount = unreadCount
-        self.onSelect = onSelect
-    }
+    let count: Int?
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                Spacer()
-                Text("\(items.count)")
+        HStack {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+            Spacer()
+            if let count {
+                Text("\(count)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-
-            Divider()
-
-            List(items) { item in
-                Row(
-                    item: item,
-                    isSelected: isSelected(item),
-                    isComposing: composingJids.contains(item.jid),
-                    unreadCount: unreadCount(item),
-                    showAvatar: avatarData != nil,
-                    avatarData: avatarData?(item)
-                )
-                    .contentShape(Rectangle())
-                    .onTapGesture { onSelect(item) }
-                    .onAppear { onItemAppear?(item) }
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(isSelected(item) ? Color.accentColor.opacity(0.16) : Color.clear)
-            }
-            .listStyle(.inset)
         }
+        .padding(.top, 4)
+        .padding(.bottom, 4)
     }
+}
 
-    private func isSelected(_ item: DirectoryItem) -> Bool {
-        return selectedJid == item.jid
-    }
+private struct SidebarRow: View {
+    let title: String
+    let subtitle: String?
+    let showAvatar: Bool
+    let avatarData: Data?
+    let isSelected: Bool
+    let isComposing: Bool
+    let unreadCount: Int
+    let onSelect: () -> Void
 
-    private struct Row: View {
-        let item: DirectoryItem
-        let isSelected: Bool
-        let isComposing: Bool
-        let unreadCount: Int
-        let showAvatar: Bool
-        let avatarData: Data?
-
-        var body: some View {
-            HStack(spacing: 8) {
-                if showAvatar {
-                    AvatarCircle(imageData: avatarData, fallbackText: item.name)
-                }
-                Text(item.name)
+    var body: some View {
+        HStack(spacing: 8) {
+            if showAvatar {
+                AvatarCircle(imageData: avatarData, fallbackText: title)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
                     .lineLimit(1)
-                Spacer(minLength: 0)
-                if isComposing {
-                    ProgressView()
-                        .scaleEffect(0.5)
-                        .frame(width: 16, height: 16)
-                }
-                if unreadCount > 0 {
-                    UnreadBadge(count: unreadCount)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
-            .padding(.vertical, 6)
+            Spacer(minLength: 0)
+            if isComposing {
+                ProgressView()
+                    .scaleEffect(0.5)
+                    .frame(width: 16, height: 16)
+            }
+            if unreadCount > 0 {
+                UnreadBadge(count: unreadCount)
+            }
         }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+        .listRowSeparator(.hidden)
+        .listRowBackground(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
     }
 }
 
