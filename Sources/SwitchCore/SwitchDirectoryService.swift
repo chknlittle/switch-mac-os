@@ -82,6 +82,13 @@ public final class SwitchDirectoryService: ObservableObject {
         xmpp.ensureHistoryLoaded(with: item.jid)
     }
 
+    public func openPinnedChat(jid: String) {
+        selectedSessionJid = nil
+        chatTarget = .dispatcher(jid)
+        lastSelectedIndividualJid = nil
+        awaitingNewSession = false
+    }
+
     public func sendChat(body: String) {
         guard let target = chatTarget else { return }
         let jid = target.jid
@@ -96,9 +103,11 @@ public final class SwitchDirectoryService: ObservableObject {
         }
 
         if case .dispatcher(let dispatcherJid) = target {
-            knownIndividualJids = Set(individuals.map { $0.jid })
-            awaitingNewSession = true
-            pollForNewSession(dispatcherJid: dispatcherJid)
+            if selectedDispatcherJid == dispatcherJid {
+                knownIndividualJids = Set(individuals.map { $0.jid })
+                awaitingNewSession = true
+                pollForNewSession(dispatcherJid: dispatcherJid)
+            }
         }
     }
 
@@ -115,9 +124,11 @@ public final class SwitchDirectoryService: ObservableObject {
         }
 
         if case .dispatcher(let dispatcherJid) = target {
-            knownIndividualJids = Set(individuals.map { $0.jid })
-            awaitingNewSession = true
-            pollForNewSession(dispatcherJid: dispatcherJid)
+            if selectedDispatcherJid == dispatcherJid {
+                knownIndividualJids = Set(individuals.map { $0.jid })
+                awaitingNewSession = true
+                pollForNewSession(dispatcherJid: dispatcherJid)
+            }
         }
     }
 

@@ -7,6 +7,7 @@ public struct AppConfig: Sendable {
     public let xmppPassword: String
     public let switchDirectoryJid: String?
     public let switchPubSubJid: String?
+    public let switchAcornJid: String?
 
     public init(
         xmppHost: String,
@@ -14,7 +15,8 @@ public struct AppConfig: Sendable {
         xmppJid: String,
         xmppPassword: String,
         switchDirectoryJid: String?,
-        switchPubSubJid: String?
+        switchPubSubJid: String?,
+        switchAcornJid: String?
     ) {
         self.xmppHost = xmppHost
         self.xmppPort = xmppPort
@@ -22,6 +24,7 @@ public struct AppConfig: Sendable {
         self.xmppPassword = xmppPassword
         self.switchDirectoryJid = switchDirectoryJid
         self.switchPubSubJid = switchPubSubJid
+        self.switchAcornJid = switchAcornJid
     }
 
     public static func load() throws -> AppConfig {
@@ -44,13 +47,23 @@ public struct AppConfig: Sendable {
         let pubsub = env["SWITCH_PUBSUB_JID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let pubsubJid = (pubsub?.isEmpty == false) ? pubsub : nil
 
+        let acorn = env["SWITCH_ACORN_JID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var acornJid = (acorn?.isEmpty == false) ? acorn : nil
+        if acornJid == nil {
+            let parts = jid.split(separator: "@", maxSplits: 1)
+            if parts.count == 2 {
+                acornJid = "acorn@\(parts[1])"
+            }
+        }
+
         return AppConfig(
             xmppHost: host,
             xmppPort: port,
             xmppJid: jid,
             xmppPassword: password,
             switchDirectoryJid: directoryJid,
-            switchPubSubJid: pubsubJid
+            switchPubSubJid: pubsubJid,
+            switchAcornJid: acornJid
         )
     }
 }

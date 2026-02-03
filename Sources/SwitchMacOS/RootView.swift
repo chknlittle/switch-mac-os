@@ -12,7 +12,12 @@ struct RootView: View {
             if let error = model.configError {
                 ConfigErrorView(error: error)
             } else if let directory = model.directory {
-                DirectoryShellView(directory: directory, xmpp: model.xmpp, chatStore: model.xmpp.chatStore)
+                DirectoryShellView(
+                    directory: directory,
+                    xmpp: model.xmpp,
+                    chatStore: model.xmpp.chatStore,
+                    acornJid: model.config?.switchAcornJid
+                )
             } else {
                 NoDirectoryView(statusText: model.xmpp.statusText)
             }
@@ -24,19 +29,35 @@ private struct DirectoryShellView: View {
     @ObservedObject var directory: SwitchDirectoryService
     @ObservedObject var xmpp: XMPPService
     @ObservedObject var chatStore: ChatStore
+    let acornJid: String?
     @State private var composerText: String = ""
     @State private var pendingImage: PendingImageAttachment? = nil
 
     var body: some View {
         HSplitView {
-            ColumnList(
-                title: "Dispatchers",
-                items: directory.dispatchers,
-                selectedJid: directory.selectedDispatcherJid,
-                composingJids: directory.dispatchersWithComposingSessions
-            ) { item in
-                directory.selectDispatcher(item)
+            VStack(spacing: 0) {
+                if let acornJid {
+                    PinnedChatSection(
+                        title: "Acorn",
+                        name: "acorn",
+                        jid: acornJid,
+                        isSelected: directory.chatTarget?.jid == acornJid
+                    ) {
+                        directory.openPinnedChat(jid: acornJid)
+                    }
+                }
+
+                ColumnList(
+                    title: "Dispatchers",
+                    items: directory.dispatchers,
+                    selectedJid: directory.selectedDispatcherJid,
+                    composingJids: directory.dispatchersWithComposingSessions
+                ) { item in
+                    directory.selectDispatcher(item)
+                }
             }
+            .frame(minWidth: 180)
+
             ColumnList(
                 title: "Sessions",
                 items: directory.individuals,
@@ -45,6 +66,7 @@ private struct DirectoryShellView: View {
             ) { item in
                 directory.selectIndividual(item)
             }
+            .frame(minWidth: 180)
 
             ChatPane(
                 title: chatTitle,
@@ -111,6 +133,51 @@ private struct DirectoryShellView: View {
     }
 }
 
+private struct PinnedChatSection: View {
+    let title: String
+    let name: String
+    let jid: String
+    let isSelected: Bool
+    let onOpen: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            Button(action: onOpen) {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .lineLimit(1)
+                        Text(jid)
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(isSelected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+        }
+    }
+}
+
 private struct ColumnList: View {
     let title: String
     let items: [DirectoryItem]
@@ -142,7 +209,6 @@ private struct ColumnList: View {
             }
             .listStyle(.inset)
         }
-        .frame(minWidth: 180)
     }
 
     private func isSelected(_ item: DirectoryItem) -> Bool {

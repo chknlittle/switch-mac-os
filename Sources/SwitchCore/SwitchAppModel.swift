@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 public final class SwitchAppModel: ObservableObject {
     @Published public private(set) var configError: String? = nil
+    @Published public private(set) var config: AppConfig? = nil
     @Published public private(set) var xmpp: XMPPService = XMPPService()
     @Published public private(set) var directory: SwitchDirectoryService? = nil
 
@@ -12,6 +13,7 @@ public final class SwitchAppModel: ObservableObject {
     public init() {
         do {
             let config = try AppConfig.load()
+            self.config = config
 
             if let dirJid = config.switchDirectoryJid {
                 directory = SwitchDirectoryService(
