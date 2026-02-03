@@ -125,10 +125,30 @@ public struct ChatMessage: Identifiable, Hashable, Sendable {
 public final class ChatStore: ObservableObject {
     @Published public private(set) var threads: [String: [ChatMessage]] = [:]
 
+    @Published public private(set) var unreadByThread: [String: Int] = [:]
+    @Published public private(set) var activeThreadJid: String? = nil
+
     public let liveIncomingMessage = PassthroughSubject<ChatMessage, Never>()
     public let liveOutgoingMessage = PassthroughSubject<ChatMessage, Never>()
 
     public init() {}
+
+    public func setActiveThread(_ threadJid: String?) {
+        activeThreadJid = threadJid
+        if let t = threadJid {
+            markRead(threadJid: t)
+        }
+    }
+
+    public func markRead(threadJid: String) {
+        if unreadByThread[threadJid] != nil {
+            unreadByThread[threadJid] = nil
+        }
+    }
+
+    public func unreadCount(for threadJid: String) -> Int {
+        unreadByThread[threadJid] ?? 0
+    }
 
     public func messages(for threadJid: String) -> [ChatMessage] {
         threads[threadJid] ?? []
@@ -145,6 +165,9 @@ public final class ChatStore: ObservableObject {
         )
         let inserted = appendIfMissing(msg)
         if inserted && !isArchived {
+            if activeThreadJid != threadJid {
+                unreadByThread[threadJid, default: 0] += 1
+            }
             liveIncomingMessage.send(msg)
         }
     }
@@ -160,6 +183,8 @@ public final class ChatStore: ObservableObject {
         )
         let inserted = appendIfMissing(msg)
         if inserted && !isArchived {
+            // If we send a message in a thread, treat it as read.
+            markRead(threadJid: threadJid)
             liveOutgoingMessage.send(msg)
         }
     }

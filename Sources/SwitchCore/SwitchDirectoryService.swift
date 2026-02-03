@@ -26,6 +26,14 @@ public final class SwitchDirectoryService: ObservableObject {
         return result
     }
 
+    public func unreadCountForDispatcher(_ dispatcherJid: String, unreadByThread: [String: Int]) -> Int {
+        var total = unreadByThread[dispatcherJid] ?? 0
+        for sessionJid in dispatcherToSessions[dispatcherJid] ?? [] {
+            total += unreadByThread[sessionJid] ?? 0
+        }
+        return total
+    }
+
     private let xmpp: XMPPService
     private let directoryJid: JID
     private let directoryBareJid: BareJID

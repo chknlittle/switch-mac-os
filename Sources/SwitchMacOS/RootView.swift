@@ -41,7 +41,9 @@ private struct DirectoryShellView: View {
                         title: "Acorn",
                         name: "acorn",
                         jid: acornJid,
-                        isSelected: directory.chatTarget?.jid == acornJid
+                        isSelected: directory.chatTarget?.jid == acornJid,
+                        isComposing: xmpp.composingJids.contains(acornJid),
+                        unreadCount: chatStore.unreadCount(for: acornJid)
                     ) {
                         directory.openPinnedChat(jid: acornJid)
                     }
@@ -51,7 +53,10 @@ private struct DirectoryShellView: View {
                     title: "Dispatchers",
                     items: directory.dispatchers,
                     selectedJid: directory.selectedDispatcherJid,
-                    composingJids: directory.dispatchersWithComposingSessions
+                    composingJids: directory.dispatchersWithComposingSessions,
+                    unreadCount: { item in
+                        directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
+                    }
                 ) { item in
                     directory.selectDispatcher(item)
                 }
@@ -62,7 +67,10 @@ private struct DirectoryShellView: View {
                 title: "Sessions",
                 items: directory.individuals,
                 selectedJid: directory.selectedSessionJid,
-                composingJids: xmpp.composingJids
+                composingJids: xmpp.composingJids,
+                unreadCount: { item in
+                    chatStore.unreadCount(for: item.jid)
+                }
             ) { item in
                 directory.selectIndividual(item)
             }
@@ -95,6 +103,12 @@ private struct DirectoryShellView: View {
                 isEnabled: directory.chatTarget != nil,
                 isTyping: isChatTargetTyping
             )
+        }
+        .onAppear {
+            chatStore.setActiveThread(directory.chatTarget?.jid)
+        }
+        .onChange(of: directory.chatTarget?.jid) { newValue in
+            chatStore.setActiveThread(newValue)
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -138,6 +152,8 @@ private struct PinnedChatSection: View {
     let name: String
     let jid: String
     let isSelected: Bool
+    let isComposing: Bool
+    let unreadCount: Int
     let onOpen: () -> Void
 
     var body: some View {
@@ -164,6 +180,14 @@ private struct PinnedChatSection: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
+                    if isComposing {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 16, height: 16)
+                    }
+                    if unreadCount > 0 {
+                        UnreadBadge(count: unreadCount)
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -183,7 +207,24 @@ private struct ColumnList: View {
     let items: [DirectoryItem]
     let selectedJid: String?
     let composingJids: Set<String>
+    let unreadCount: (DirectoryItem) -> Int
     let onSelect: (DirectoryItem) -> Void
+
+    init(
+        title: String,
+        items: [DirectoryItem],
+        selectedJid: String?,
+        composingJids: Set<String>,
+        unreadCount: @escaping (DirectoryItem) -> Int = { _ in 0 },
+        onSelect: @escaping (DirectoryItem) -> Void
+    ) {
+        self.title = title
+        self.items = items
+        self.selectedJid = selectedJid
+        self.composingJids = composingJids
+        self.unreadCount = unreadCount
+        self.onSelect = onSelect
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -201,7 +242,12 @@ private struct ColumnList: View {
             Divider()
 
             List(items) { item in
-                Row(item: item, isSelected: isSelected(item), isComposing: composingJids.contains(item.jid))
+                Row(
+                    item: item,
+                    isSelected: isSelected(item),
+                    isComposing: composingJids.contains(item.jid),
+                    unreadCount: unreadCount(item)
+                )
                     .contentShape(Rectangle())
                     .onTapGesture { onSelect(item) }
                     .listRowSeparator(.hidden)
@@ -219,6 +265,7 @@ private struct ColumnList: View {
         let item: DirectoryItem
         let isSelected: Bool
         let isComposing: Bool
+        let unreadCount: Int
 
         var body: some View {
             HStack(spacing: 8) {
@@ -230,9 +277,31 @@ private struct ColumnList: View {
                         .scaleEffect(0.5)
                         .frame(width: 16, height: 16)
                 }
+                if unreadCount > 0 {
+                    UnreadBadge(count: unreadCount)
+                }
             }
             .padding(.vertical, 6)
         }
+    }
+}
+
+private struct UnreadBadge: View {
+    let count: Int
+
+    private var label: String {
+        if count > 99 { return "99+" }
+        return String(count)
+    }
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.primary.opacity(0.85))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.secondary.opacity(0.14))
+            .clipShape(Capsule())
     }
 }
 
