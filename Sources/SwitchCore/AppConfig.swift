@@ -1,5 +1,17 @@
 import Foundation
 
+public struct PinnedChat: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+    public let jid: String
+
+    public init(title: String, jid: String) {
+        self.title = title
+        self.jid = jid
+        self.id = jid
+    }
+}
+
 public struct AppConfig: Sendable {
     public let xmppHost: String
     public let xmppPort: Int
@@ -7,7 +19,7 @@ public struct AppConfig: Sendable {
     public let xmppPassword: String
     public let switchDirectoryJid: String?
     public let switchPubSubJid: String?
-    public let switchAcornJid: String?
+    public let pinnedChats: [PinnedChat]
 
     public init(
         xmppHost: String,
@@ -16,7 +28,7 @@ public struct AppConfig: Sendable {
         xmppPassword: String,
         switchDirectoryJid: String?,
         switchPubSubJid: String?,
-        switchAcornJid: String?
+        pinnedChats: [PinnedChat]
     ) {
         self.xmppHost = xmppHost
         self.xmppPort = xmppPort
@@ -24,7 +36,7 @@ public struct AppConfig: Sendable {
         self.xmppPassword = xmppPassword
         self.switchDirectoryJid = switchDirectoryJid
         self.switchPubSubJid = switchPubSubJid
-        self.switchAcornJid = switchAcornJid
+        self.pinnedChats = pinnedChats
     }
 
     public static func load() throws -> AppConfig {
@@ -47,14 +59,7 @@ public struct AppConfig: Sendable {
         let pubsub = env["SWITCH_PUBSUB_JID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let pubsubJid = (pubsub?.isEmpty == false) ? pubsub : nil
 
-        let acorn = env["SWITCH_ACORN_JID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        var acornJid = (acorn?.isEmpty == false) ? acorn : nil
-        if acornJid == nil {
-            let parts = jid.split(separator: "@", maxSplits: 1)
-            if parts.count == 2 {
-                acornJid = "acorn@\(parts[1])"
-            }
-        }
+        let pinnedChats = EnvLoader.loadPinnedChats(env)
 
         return AppConfig(
             xmppHost: host,
@@ -63,7 +68,7 @@ public struct AppConfig: Sendable {
             xmppPassword: password,
             switchDirectoryJid: directoryJid,
             switchPubSubJid: pubsubJid,
-            switchAcornJid: acornJid
+            pinnedChats: pinnedChats
         )
     }
 }
@@ -136,6 +141,64 @@ public enum EnvLoader {
             }
         }
         return (trimmed, defaultPort)
+    }
+
+    public static func loadPinnedChats(_ env: [String: String]) -> [PinnedChat] {
+        // Open source default: no pinned chats.
+        //
+        // Preferred format:
+        //   SWITCH_PINNED_CHATS="label=jid,other=jid2"
+        // You may also provide bare JIDs:
+        //   SWITCH_PINNED_CHATS="jid1,jid2"
+        let raw = env["SWITCH_PINNED_CHATS"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let raw, !raw.isEmpty {
+            return parsePinnedChats(raw)
+        }
+        return []
+    }
+
+    private static func parsePinnedChats(_ raw: String) -> [PinnedChat] {
+        let parts = raw
+            .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == "\r" || $0 == ";" })
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var seen: Set<String> = []
+        var out: [PinnedChat] = []
+        out.reserveCapacity(parts.count)
+
+        for p in parts {
+            let title: String
+            let jid: String
+
+            if let eq = p.firstIndex(of: "=") {
+                title = String(p[..<eq]).trimmingCharacters(in: .whitespacesAndNewlines)
+                jid = String(p[p.index(after: eq)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                title = ""
+                jid = p
+            }
+
+            let trimmedJid = jid.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedJid.isEmpty else { continue }
+            guard !seen.contains(trimmedJid) else { continue }
+            seen.insert(trimmedJid)
+
+            let finalTitle = title.isEmpty ? inferPinnedTitle(fromJid: trimmedJid) : title
+            out.append(PinnedChat(title: finalTitle, jid: trimmedJid))
+        }
+        return out
+    }
+
+    private static func inferPinnedTitle(fromJid jid: String) -> String {
+        let s = jid.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let at = s.firstIndex(of: "@") {
+            let local = String(s[..<at])
+            if !local.isEmpty {
+                return local
+            }
+        }
+        return s
     }
 
     private static func readDotEnv(at path: String) throws -> [String: String] {

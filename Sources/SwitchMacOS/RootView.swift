@@ -16,7 +16,7 @@ struct RootView: View {
                     directory: directory,
                     xmpp: model.xmpp,
                     chatStore: model.xmpp.chatStore,
-                    acornJid: model.config?.switchAcornJid
+                    pinnedChats: model.config?.pinnedChats ?? []
                 )
             } else {
                 NoDirectoryView(statusText: model.xmpp.statusText)
@@ -29,13 +29,13 @@ private struct DirectoryShellView: View {
     @ObservedObject var directory: SwitchDirectoryService
     @ObservedObject var xmpp: XMPPService
     @ObservedObject var chatStore: ChatStore
-    let acornJid: String?
+    let pinnedChats: [PinnedChat]
     @State private var composerText: String = ""
     @State private var pendingImage: PendingImageAttachment? = nil
 
     var body: some View {
         HSplitView {
-            SidebarList(directory: directory, xmpp: xmpp, chatStore: chatStore, acornJid: acornJid)
+            SidebarList(directory: directory, xmpp: xmpp, chatStore: chatStore, pinnedChats: pinnedChats)
                 .frame(minWidth: 240)
 
             ChatPane(
@@ -113,22 +113,24 @@ private struct SidebarList: View {
     @ObservedObject var directory: SwitchDirectoryService
     @ObservedObject var xmpp: XMPPService
     @ObservedObject var chatStore: ChatStore
-    let acornJid: String?
+    let pinnedChats: [PinnedChat]
 
     var body: some View {
         List {
-            if let acornJid {
-                Section(header: SidebarSectionHeader(title: "Acorn", count: nil)) {
-                    SidebarRow(
-                        title: "acorn",
-                        subtitle: acornJid,
-                        showAvatar: false,
-                        avatarData: nil,
-                        isSelected: directory.chatTarget?.jid == acornJid,
-                        isComposing: xmpp.composingJids.contains(acornJid),
-                        unreadCount: chatStore.unreadCount(for: acornJid)
-                    ) {
-                        directory.openPinnedChat(jid: acornJid)
+            if !pinnedChats.isEmpty {
+                Section(header: SidebarSectionHeader(title: "Pinned", count: pinnedChats.count)) {
+                    ForEach(pinnedChats) { chat in
+                        SidebarRow(
+                            title: chat.title,
+                            subtitle: chat.jid,
+                            showAvatar: false,
+                            avatarData: nil,
+                            isSelected: directory.chatTarget?.jid == chat.jid,
+                            isComposing: xmpp.composingJids.contains(chat.jid),
+                            unreadCount: chatStore.unreadCount(for: chat.jid)
+                        ) {
+                            directory.openPinnedChat(jid: chat.jid)
+                        }
                     }
                 }
             }

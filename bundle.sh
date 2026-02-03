@@ -10,6 +10,13 @@ MACOS="${CONTENTS}/MacOS"
 RESOURCES="${CONTENTS}/Resources"
 ENTITLEMENTS="${REPO_ROOT}/SwitchMacOS.entitlements"
 
+INSTALL_TO_APPLICATIONS=0
+for arg in "$@"; do
+  if [ "$arg" = "--install" ]; then
+    INSTALL_TO_APPLICATIONS=1
+  fi
+done
+
 # Build
 swift build
 
@@ -51,26 +58,6 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <string>1.0</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSExceptionDomains</key>
-        <dict>
-            <key>100.119.143.40</key>
-            <dict>
-                <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                <true/>
-                <key>NSIncludesSubdomains</key>
-                <true/>
-            </dict>
-            <key>claude.local</key>
-            <dict>
-                <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                <true/>
-                <key>NSIncludesSubdomains</key>
-                <true/>
-            </dict>
-        </dict>
-    </dict>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>
@@ -81,7 +68,10 @@ PLIST
 # This is required for notifications to work on macOS.
 codesign --force --deep --sign - --entitlements "${ENTITLEMENTS}" "${BUNDLE_DIR}"
 
-# Symlink to Applications for Spotlight
-ln -sfh "${REPO_ROOT}/${BUNDLE_DIR}" "/Applications/${APP_NAME}.app"
-
-echo "Built and signed ${BUNDLE_DIR} (symlinked to /Applications)"
+if [ "$INSTALL_TO_APPLICATIONS" -eq 1 ]; then
+  ln -sfh "${REPO_ROOT}/${BUNDLE_DIR}" "/Applications/${APP_NAME}.app"
+  echo "Built and signed ${BUNDLE_DIR} (symlinked to /Applications)"
+else
+  echo "Built and signed ${BUNDLE_DIR}"
+  echo "Tip: ./bundle.sh --install to symlink into /Applications"
+fi

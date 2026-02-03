@@ -125,6 +125,15 @@ XMPP_HOST="..." XMPP_JID="..." XMPP_PASSWORD="..." SWITCH_DIRECTORY_JID="..." .b
 
 **Note:** Values in `.env` take precedence over environment variables passed on the command line.
 
+### Pinned Chats
+
+You can optionally pin one or more chats to the top of the sidebar:
+
+```bash
+SWITCH_PINNED_CHATS="notes=notes@your.xmpp.server.com,alerts=alerts@your.xmpp.server.com" \
+  .build/debug/SwitchMacOS
+```
+
 ### Running Tests
 
 ```bash

@@ -81,6 +81,16 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     public func selectDispatcher(_ item: DirectoryItem) {
+        // Clicking the currently-selected dispatcher should not re-fetch sessions.
+        // Treat it as a focus action that switches the chat target back to the dispatcher.
+        if selectedDispatcherJid == item.jid {
+            selectedSessionJid = nil
+            chatTarget = .dispatcher(item.jid)
+            lastSelectedIndividualJid = nil
+            awaitingNewSession = false
+            return
+        }
+
         selectedDispatcherJid = item.jid
         selectedSessionJid = nil
         chatTarget = .dispatcher(item.jid)
