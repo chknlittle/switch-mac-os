@@ -7,6 +7,10 @@ public final class SwitchDirectoryService: ObservableObject {
     @Published public private(set) var dispatchers: [DirectoryItem] = []
     @Published public private(set) var individuals: [DirectoryItem] = []
 
+    // UI state: used to distinguish "empty" from "still loading".
+    @Published public private(set) var isLoadingIndividuals: Bool = false
+    @Published public private(set) var individualsLoadedOnce: Bool = false
+
     @Published public private(set) var selectedDispatcherJid: String? = nil
     @Published public private(set) var selectedSessionJid: String? = nil
     @Published public private(set) var chatTarget: ChatTarget? = nil
@@ -71,6 +75,8 @@ public final class SwitchDirectoryService: ObservableObject {
             refreshSessionsForDispatcher(dispatcherJid: dispatcher)
         } else {
             individuals = []
+            isLoadingIndividuals = false
+            individualsLoadedOnce = false
         }
     }
 
@@ -80,6 +86,8 @@ public final class SwitchDirectoryService: ObservableObject {
         chatTarget = .dispatcher(item.jid)
         lastSelectedIndividualJid = nil
         individuals = []
+        isLoadingIndividuals = true
+        individualsLoadedOnce = false
         refreshSessionsForDispatcher(dispatcherJid: item.jid)
     }
 
@@ -193,6 +201,12 @@ public final class SwitchDirectoryService: ObservableObject {
         let token = UUID()
         groupsRefreshToken = token
 
+        // New dispatcher selection clears individuals; show a loading state until
+        // we know whether there are sessions.
+        if selectedDispatcherJid == dispatcherJid, individuals.isEmpty {
+            isLoadingIndividuals = true
+        }
+
         let node = nodes.groups(dispatcherJid)
         ensureSubscribed(to: node) { [weak self] in
             self?.queryItems(node: node) { items in
@@ -211,6 +225,8 @@ public final class SwitchDirectoryService: ObservableObject {
 
         if groups.isEmpty {
             individuals = []
+            isLoadingIndividuals = false
+            individualsLoadedOnce = true
             return
         }
 
@@ -240,6 +256,8 @@ public final class SwitchDirectoryService: ObservableObject {
                         self.dispatcherToSessions[dispatcherJid] = Set(merged.map { $0.jid })
                         self.loadHistoryForAllSessions()
                         self.autoSelectNewSessionIfNeeded()
+                        self.isLoadingIndividuals = false
+                        self.individualsLoadedOnce = true
                     }
                 }
             }
@@ -257,6 +275,8 @@ public final class SwitchDirectoryService: ObservableObject {
                 self.dispatcherToSessions[dispatcherJid] = Set(items.map { $0.jid })
                 self.loadHistoryForAllSessions()
                 self.autoSelectNewSessionIfNeeded()
+                self.isLoadingIndividuals = false
+                self.individualsLoadedOnce = true
             }
         }
     }

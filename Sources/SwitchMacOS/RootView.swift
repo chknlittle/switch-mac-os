@@ -153,22 +153,74 @@ private struct SidebarList: View {
             }
 
             Section(header: SidebarSectionHeader(title: "Sessions", count: directory.individuals.count)) {
-                ForEach(directory.individuals) { item in
-                    SidebarRow(
-                        title: item.name,
-                        subtitle: nil,
-                        showAvatar: false,
-                        avatarData: nil,
-                        isSelected: directory.selectedSessionJid == item.jid,
-                        isComposing: xmpp.composingJids.contains(item.jid),
-                        unreadCount: chatStore.unreadCount(for: item.jid)
-                    ) {
-                        directory.selectIndividual(item)
+                if directory.individuals.isEmpty {
+                    if directory.isLoadingIndividuals && !directory.individualsLoadedOnce {
+                        SidebarPlaceholderRow(
+                            title: "Loading sessions...",
+                            subtitle: "If this takes long, use Refresh",
+                            isLoading: true
+                        )
+                    } else {
+                        SidebarPlaceholderRow(
+                            title: "No sessions",
+                            subtitle: "This dispatcher has no active sessions",
+                            isLoading: false
+                        )
+                    }
+                } else {
+                    ForEach(directory.individuals) { item in
+                        SidebarRow(
+                            title: item.name,
+                            subtitle: nil,
+                            showAvatar: false,
+                            avatarData: nil,
+                            isSelected: directory.selectedSessionJid == item.jid,
+                            isComposing: xmpp.composingJids.contains(item.jid),
+                            unreadCount: chatStore.unreadCount(for: item.jid)
+                        ) {
+                            directory.selectIndividual(item)
+                        }
                     }
                 }
             }
         }
         .listStyle(.inset)
+    }
+}
+
+private struct SidebarPlaceholderRow: View {
+    let title: String
+    let subtitle: String?
+    let isLoading: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if isLoading {
+                ProgressView()
+                    .scaleEffect(0.55)
+                    .frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "circle.dashed")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 10.5, weight: .regular, design: .default))
+                        .foregroundStyle(.secondary.opacity(0.8))
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .allowsHitTesting(false)
     }
 }
 
