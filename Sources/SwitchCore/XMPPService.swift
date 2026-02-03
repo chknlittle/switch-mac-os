@@ -226,6 +226,13 @@ public final class XMPPService: ObservableObject {
     private var historyQueue: [String] = []
     private var isProcessingHistoryQueue: Bool = false
 
+    /// True while we're draining the initial MAM history queue.
+    @Published public private(set) var isHistoryWarmup: Bool = false
+
+    // MAM history pulls can be expensive on first launch; keep the default small.
+    // Override via env: SWITCH_MAM_LAST_ITEMS (10..500).
+    private let mamLastItems: Int
+
     private var cachedUploadComponents: [HttpFileUploadModule.UploadComponent] = []
 
     /// JIDs currently in "composing" (typing) state
@@ -240,6 +247,10 @@ public final class XMPPService: ObservableObject {
         self.httpUploadModule = HttpFileUploadModule()
         self.pepUserAvatarModule = PEPUserAvatarModule()
         self.vcardTempModule = VCardTempModule()
+
+        let rawMamLast = ProcessInfo.processInfo.environment["SWITCH_MAM_LAST_ITEMS"] ?? "50"
+        let parsedMamLast = Int(rawMamLast) ?? 50
+        self.mamLastItems = max(10, min(parsedMamLast, 500))
 
         registerDefaultModules()
         bindPublishers()
@@ -424,6 +435,7 @@ public final class XMPPService: ObservableObject {
 
         historyQueuedThreads.insert(jid)
         historyQueue.append(jid)
+        isHistoryWarmup = true
         processHistoryQueueIfNeeded()
     }
 
@@ -436,6 +448,9 @@ public final class XMPPService: ObservableObject {
     private func processNextHistoryLoad() {
         guard let next = historyQueue.first else {
             isProcessingHistoryQueue = false
+            if historyLoadingThreads.isEmpty && historyQueuedThreads.isEmpty {
+                isHistoryWarmup = false
+            }
             return
         }
         historyQueue.removeFirst()
@@ -453,7 +468,7 @@ public final class XMPPService: ObservableObject {
             version: .MAM2,
             query: form,
             queryId: queryId,
-            rsm: RSM.Query(lastItems: 200)
+            rsm: RSM.Query(lastItems: mamLastItems)
         ) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
@@ -463,6 +478,10 @@ public final class XMPPService: ObservableObject {
                     self.historyLoadedThreads.insert(next)
                 case .failure(let err):
                     logger.error("MAM query failed for \(next, privacy: .public): \(String(describing: err), privacy: .public)")
+                }
+
+                if self.historyQueue.isEmpty && self.historyLoadingThreads.isEmpty && self.historyQueuedThreads.isEmpty {
+                    self.isHistoryWarmup = false
                 }
 
                 // Keep routing archived messages briefly after completion. Some servers/libraries

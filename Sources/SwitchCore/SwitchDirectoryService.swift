@@ -45,11 +45,17 @@ public final class SwitchDirectoryService: ObservableObject {
     private let nodes: SwitchDirectoryNodes
     private var cancellables: Set<AnyCancellable> = []
     private var subscribedNodes: Set<String> = []
+    private var pendingSubscriptions: Set<String> = []
     private var lastSelectedIndividualJid: String? = nil
     private var individualsRefreshToken: UUID? = nil
     private var groupsRefreshToken: UUID? = nil
     private var awaitingNewSession = false
     private var knownIndividualJids: Set<String> = []
+
+    // Sorting can cause visible list "jitter" while history loads; debounce and
+    // briefly suppress resorting during initial loads.
+    private var resortWorkItem: DispatchWorkItem? = nil
+    private var suppressResortUntil: Date = .distantPast
 
     public init(
         xmpp: XMPPService,
@@ -99,6 +105,7 @@ public final class SwitchDirectoryService: ObservableObject {
         individuals = []
         isLoadingIndividuals = true
         individualsLoadedOnce = false
+        suppressResortUntil = Date().addingTimeInterval(1.5)
         xmpp.ensureHistoryLoaded(with: item.jid)
         refreshSessionsForDispatcher(dispatcherJid: item.jid)
     }
@@ -197,15 +204,14 @@ public final class SwitchDirectoryService: ObservableObject {
 
     private func refreshDispatchers() {
         let node = nodes.dispatchers
-        ensureSubscribed(to: node) { [weak self] in
-            self?.queryItems(node: node) { items in
-                guard let self else { return }
-                self.dispatchers = self.sortDispatchersByRecency(items)
+        ensureSubscribed(to: node)
+        queryItems(node: node) { [weak self] items in
+            guard let self else { return }
+            self.dispatchers = self.sortDispatchersByRecency(items)
 
-                // If nothing is selected yet, pick the first dispatcher and load sessions.
-                if self.selectedDispatcherJid == nil, let first = self.dispatchers.first {
-                    self.selectDispatcher(first)
-                }
+            // If nothing is selected yet, pick the first dispatcher and load sessions.
+            if self.selectedDispatcherJid == nil, let first = self.dispatchers.first {
+                self.selectDispatcher(first)
             }
         }
     }
@@ -221,14 +227,13 @@ public final class SwitchDirectoryService: ObservableObject {
         }
 
         let node = nodes.groups(dispatcherJid)
-        ensureSubscribed(to: node) { [weak self] in
-            self?.queryItems(node: node) { items in
-                guard let self else { return }
+        ensureSubscribed(to: node)
+        queryItems(node: node) { [weak self] items in
+            guard let self else { return }
 
-                guard self.groupsRefreshToken == token else { return }
-                guard self.selectedDispatcherJid == dispatcherJid else { return }
-                self.refreshIndividualsForDispatcher(dispatcherJid: dispatcherJid, groups: items)
-            }
+            guard self.groupsRefreshToken == token else { return }
+            guard self.selectedDispatcherJid == dispatcherJid else { return }
+            self.refreshIndividualsForDispatcher(dispatcherJid: dispatcherJid, groups: items)
         }
     }
 
@@ -254,24 +259,24 @@ public final class SwitchDirectoryService: ObservableObject {
         for group in groups {
             let groupJid = group.jid
             let node = nodes.individuals(groupJid)
-            ensureSubscribed(to: node) { [weak self] in
+            ensureSubscribed(to: node)
+            queryItems(node: node) { [weak self] items in
                 guard let self else { return }
-                self.queryItems(node: node) { items in
-                    guard self.individualsRefreshToken == token else { return }
-                    guard self.selectedDispatcherJid == dispatcherJid else { return }
-                    for it in items {
-                        aggregate[it.jid] = it
-                    }
-                    remaining -= 1
-                    if remaining == 0 {
-                        let merged = self.sortByRecency(Array(aggregate.values))
-                        self.individuals = merged
-                        self.dispatcherToSessions[dispatcherJid] = Set(merged.map { $0.jid })
-                        self.loadHistoryForAllSessions()
-                        self.autoSelectNewSessionIfNeeded()
-                        self.isLoadingIndividuals = false
-                        self.individualsLoadedOnce = true
-                    }
+                guard self.individualsRefreshToken == token else { return }
+                guard self.selectedDispatcherJid == dispatcherJid else { return }
+                for it in items {
+                    aggregate[it.jid] = it
+                }
+                remaining -= 1
+                if remaining == 0 {
+                    let merged = self.sortByRecency(Array(aggregate.values))
+                    self.individuals = merged
+                    self.dispatcherToSessions[dispatcherJid] = Set(merged.map { $0.jid })
+                    self.suppressResortUntil = Date().addingTimeInterval(1.5)
+                    self.loadHistoryForAllSessions()
+                    self.autoSelectNewSessionIfNeeded()
+                    self.isLoadingIndividuals = false
+                    self.individualsLoadedOnce = true
                 }
             }
         }
@@ -279,18 +284,18 @@ public final class SwitchDirectoryService: ObservableObject {
 
     private func refreshIndividuals(groupJid: String, dispatcherJid: String, token: UUID) {
         let node = nodes.individuals(groupJid)
-        ensureSubscribed(to: node) { [weak self] in
-            self?.queryItems(node: node) { items in
-                guard let self else { return }
-                guard self.individualsRefreshToken == token else { return }
-                guard self.selectedDispatcherJid == dispatcherJid else { return }
-                self.individuals = self.sortByRecency(items)
-                self.dispatcherToSessions[dispatcherJid] = Set(items.map { $0.jid })
-                self.loadHistoryForAllSessions()
-                self.autoSelectNewSessionIfNeeded()
-                self.isLoadingIndividuals = false
-                self.individualsLoadedOnce = true
-            }
+        ensureSubscribed(to: node)
+        queryItems(node: node) { [weak self] items in
+            guard let self else { return }
+            guard self.individualsRefreshToken == token else { return }
+            guard self.selectedDispatcherJid == dispatcherJid else { return }
+            self.individuals = self.sortByRecency(items)
+            self.dispatcherToSessions[dispatcherJid] = Set(items.map { $0.jid })
+            self.suppressResortUntil = Date().addingTimeInterval(1.5)
+            self.loadHistoryForAllSessions()
+            self.autoSelectNewSessionIfNeeded()
+            self.isLoadingIndividuals = false
+            self.individualsLoadedOnce = true
         }
     }
 
@@ -308,18 +313,18 @@ public final class SwitchDirectoryService: ObservableObject {
         }
     }
 
-    private func ensureSubscribed(to node: String, then completion: @escaping @MainActor () -> Void) {
-        guard !subscribedNodes.contains(node) else {
-            completion()
-            return
-        }
+    private func ensureSubscribed(to node: String) {
+        guard !subscribedNodes.contains(node) else { return }
+        guard !pendingSubscriptions.contains(node) else { return }
+        pendingSubscriptions.insert(node)
 
         let subscriber = xmpp.client.boundJid ?? JID(xmpp.client.userBareJid)
         let service = pubSubBareJid ?? directoryBareJid
         xmpp.pubsub().subscribe(at: service, to: node, subscriber: subscriber, with: nil as JabberDataElement?, completionHandler: { [weak self] _ in
             Task { @MainActor in
-                self?.subscribedNodes.insert(node)
-                completion()
+                guard let self else { return }
+                self.pendingSubscriptions.remove(node)
+                self.subscribedNodes.insert(node)
             }
         })
     }
@@ -341,10 +346,25 @@ public final class SwitchDirectoryService: ObservableObject {
         xmpp.chatStore.$threads
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.resortIndividualsByRecency()
-                self?.resortDispatchersByRecency()
+                self?.scheduleResort()
             }
             .store(in: &cancellables)
+    }
+
+    private func scheduleResort() {
+        resortWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.isLoadingIndividuals { return }
+                if self.xmpp.isHistoryWarmup { return }
+                if Date() < self.suppressResortUntil { return }
+                self.resortIndividualsByRecency()
+                self.resortDispatchersByRecency()
+            }
+        }
+        resortWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     private func resortIndividualsByRecency() {
@@ -360,7 +380,12 @@ public final class SwitchDirectoryService: ObservableObject {
     private func loadHistoryForAllSessions() {
         // Prefetch a small number of threads so the UI has recent context without
         // spamming the server with one MAM query per session.
-        for item in individuals.prefix(15) {
+        let raw = ProcessInfo.processInfo.environment["SWITCH_PREFETCH_HISTORY_THREADS"] ?? "0"
+        let parsed = Int(raw) ?? 0
+        let limit = max(0, min(parsed, 50))
+        guard limit > 0 else { return }
+
+        for item in individuals.prefix(limit) {
             xmpp.ensureHistoryLoaded(with: item.jid)
         }
     }
@@ -370,7 +395,14 @@ public final class SwitchDirectoryService: ObservableObject {
         return items.sorted { a, b in
             let aTime = chatStore.messages(for: a.jid).last?.timestamp ?? .distantPast
             let bTime = chatStore.messages(for: b.jid).last?.timestamp ?? .distantPast
-            return aTime > bTime
+            if aTime != bTime {
+                return aTime > bTime
+            }
+            // Keep ordering stable until history arrives.
+            if a.name != b.name {
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+            return a.jid.localizedStandardCompare(b.jid) == .orderedAscending
         }
     }
 
@@ -380,7 +412,13 @@ public final class SwitchDirectoryService: ObservableObject {
             // Get most recent message from dispatcher itself or any of its sessions
             let aTime = lastActivityForDispatcher(a.jid, chatStore: chatStore)
             let bTime = lastActivityForDispatcher(b.jid, chatStore: chatStore)
-            return aTime > bTime
+            if aTime != bTime {
+                return aTime > bTime
+            }
+            if a.name != b.name {
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+            return a.jid.localizedStandardCompare(b.jid) == .orderedAscending
         }
     }
 
