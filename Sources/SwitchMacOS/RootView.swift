@@ -461,6 +461,12 @@ private struct ChatPane: View {
     let isEnabled: Bool
     let isTyping: Bool
 
+    private var canCancel: Bool {
+        guard isEnabled else { return false }
+        let jid = (threadJid ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return !jid.isEmpty
+    }
+
     private let bottomAnchorId: String = "__bottom__"
     private let composerMinHeight: CGFloat = 28
     private let composerMaxHeight: CGFloat = 160
@@ -480,6 +486,13 @@ private struct ChatPane: View {
                     Text("typing...")
                         .font(.system(size: 11, weight: .regular, design: .default))
                         .foregroundStyle(.secondary)
+                    Button("Stop") {
+                        sendCancel()
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .help("Send /cancel")
                 }
                 Spacer()
             }
@@ -565,6 +578,17 @@ private struct ChatPane: View {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(Color(NSColor.controlBackgroundColor))
                     )
+                    Button {
+                        sendCancel()
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(canCancel ? (isTyping ? Color.red : Color.secondary) : Color.secondary.opacity(0.5))
+                    .disabled(!canCancel)
+                    .help("Send /cancel")
+                    .keyboardShortcut(.escape, modifiers: [])
                     Button("Send") { onSend() }
                         .disabled(!isEnabled || !hasSendableContent)
                 }
@@ -640,6 +664,12 @@ private struct ChatPane: View {
             try? await Task.sleep(nanoseconds: 120_000_000)
             scrollNow()
         }
+    }
+
+    private func sendCancel() {
+        let jid = (threadJid ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !jid.isEmpty else { return }
+        xmpp.sendMessage(to: jid, body: "/cancel")
     }
 
     private struct MessageRow: View {
