@@ -88,6 +88,7 @@ public final class SwitchDirectoryService: ObservableObject {
             chatTarget = .dispatcher(item.jid)
             lastSelectedIndividualJid = nil
             awaitingNewSession = false
+            xmpp.ensureHistoryLoaded(with: item.jid)
             return
         }
 
@@ -98,6 +99,7 @@ public final class SwitchDirectoryService: ObservableObject {
         individuals = []
         isLoadingIndividuals = true
         individualsLoadedOnce = false
+        xmpp.ensureHistoryLoaded(with: item.jid)
         refreshSessionsForDispatcher(dispatcherJid: item.jid)
     }
 
@@ -113,6 +115,7 @@ public final class SwitchDirectoryService: ObservableObject {
         chatTarget = .dispatcher(jid)
         lastSelectedIndividualJid = nil
         awaitingNewSession = false
+        xmpp.ensureHistoryLoaded(with: jid)
     }
 
     public func sendChat(body: String) {
