@@ -345,7 +345,9 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     private func loadHistoryForAllSessions() {
-        for item in individuals {
+        // Prefetch a small number of threads so the UI has recent context without
+        // spamming the server with one MAM query per session.
+        for item in individuals.prefix(15) {
             xmpp.ensureHistoryLoaded(with: item.jid)
         }
     }

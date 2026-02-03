@@ -217,8 +217,14 @@ public final class XMPPService: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
 
     private var mamQueryToThread: [String: String] = [:]
+    private var mamRouteCleanup: [String: DispatchWorkItem] = [:]
+    private let mamRouteGraceSeconds: TimeInterval = 30
+
     private var historyLoadedThreads: Set<String> = []
     private var historyLoadingThreads: Set<String> = []
+    private var historyQueuedThreads: Set<String> = []
+    private var historyQueue: [String] = []
+    private var isProcessingHistoryQueue: Bool = false
 
     private var cachedUploadComponents: [HttpFileUploadModule.UploadComponent] = []
 
@@ -409,34 +415,78 @@ public final class XMPPService: ObservableObject {
     }
 
     public func ensureHistoryLoaded(with bareJid: String) {
-        if historyLoadedThreads.contains(bareJid) || historyLoadingThreads.contains(bareJid) {
+        let jid = bareJid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !jid.isEmpty else { return }
+
+        if historyLoadedThreads.contains(jid) || historyLoadingThreads.contains(jid) || historyQueuedThreads.contains(jid) {
             return
         }
-        historyLoadingThreads.insert(bareJid)
+
+        historyQueuedThreads.insert(jid)
+        historyQueue.append(jid)
+        processHistoryQueueIfNeeded()
+    }
+
+    private func processHistoryQueueIfNeeded() {
+        guard !isProcessingHistoryQueue else { return }
+        isProcessingHistoryQueue = true
+        processNextHistoryLoad()
+    }
+
+    private func processNextHistoryLoad() {
+        guard let next = historyQueue.first else {
+            isProcessingHistoryQueue = false
+            return
+        }
+        historyQueue.removeFirst()
+        historyQueuedThreads.remove(next)
+        historyLoadingThreads.insert(next)
 
         let queryId = UUID().uuidString
-        mamQueryToThread[queryId] = bareJid
+        mamQueryToThread[queryId] = next
+        scheduleMamRouteCleanup(queryId: queryId)
 
         let form = MAMQueryForm(version: .MAM2)
-        form.with = JID(bareJid)
+        form.with = JID(next)
 
-        mamModule.queryItems(version: .MAM2, query: form, queryId: queryId, rsm: RSM.Query(lastItems: 200)) { [weak self] result in
+        mamModule.queryItems(
+            version: .MAM2,
+            query: form,
+            queryId: queryId,
+            rsm: RSM.Query(lastItems: 200)
+        ) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
-                self.historyLoadingThreads.remove(bareJid)
+                self.historyLoadingThreads.remove(next)
                 switch result {
                 case .success:
-                    self.historyLoadedThreads.insert(bareJid)
+                    self.historyLoadedThreads.insert(next)
                 case .failure(let err):
-                    logger.error("MAM query failed for \(bareJid, privacy: .public): \(String(describing: err), privacy: .public)")
+                    logger.error("MAM query failed for \(next, privacy: .public): \(String(describing: err), privacy: .public)")
                 }
 
-                // Results can still be in flight for a moment; keep routing briefly.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                    self?.mamQueryToThread.removeValue(forKey: queryId)
-                }
+                // Keep routing archived messages briefly after completion. Some servers/libraries
+                // can deliver the final batch slightly after the completion callback fires.
+                self.scheduleMamRouteCleanup(queryId: queryId)
+
+                self.processNextHistoryLoad()
             }
         }
+    }
+
+    private func scheduleMamRouteCleanup(queryId: String) {
+        if let existing = mamRouteCleanup[queryId] {
+            existing.cancel()
+        }
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.mamQueryToThread.removeValue(forKey: queryId)
+                self.mamRouteCleanup.removeValue(forKey: queryId)
+            }
+        }
+        mamRouteCleanup[queryId] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + mamRouteGraceSeconds, execute: work)
     }
 
     private func configureClient(using config: AppConfig) {
@@ -560,6 +610,9 @@ public final class XMPPService: ObservableObject {
                 guard let self else { return }
                 guard let threadJid = self.mamQueryToThread[archived.query.id] else { return }
                 guard let body = archived.message.body, !body.isEmpty else { return }
+
+                // Extend routing window while results are streaming in.
+                self.scheduleMamRouteCleanup(queryId: archived.query.id)
 
                 let localBare = self.client.userBareJid
                 let fromBare = archived.message.from?.bareJid
