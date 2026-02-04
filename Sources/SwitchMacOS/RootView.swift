@@ -137,13 +137,6 @@ private struct SidebarList: View {
         static let bottom = "__bottom__"
     }
 
-    private struct ScrollViewHeightKey: PreferenceKey {
-        static var defaultValue: CGFloat = 0
-        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-            value = nextValue()
-        }
-    }
-
     private struct BottomMarkerMinYKey: PreferenceKey {
         static var defaultValue: CGFloat = 0
         static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -163,25 +156,39 @@ private struct SidebarList: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SidebarSectionHeader(title: "Sessions", count: directory.individuals.count)
+            SidebarSectionHeader(title: "Sessions", count: directory.individuals.count, isLoading: directory.isLoadingIndividuals)
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
 
-            ScrollViewReader { proxy in
-                ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Spacer(minLength: 0)
+            GeometryReader { g in
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Spacer(minLength: 0)
 
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            if directory.individuals.isEmpty {
-                                if directory.isLoadingIndividuals && !directory.individualsLoadedOnce {
-                                    SidebarPlaceholderRow(
-                                        title: "Loading sessions...",
-                                        subtitle: "If this takes long, use Refresh",
-                                        isLoading: true
-                                    )
-                                    .padding(.horizontal, 10)
-                                } else {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                if !directory.individuals.isEmpty {
+                                    // directory.individuals is sorted by recency (most recent first);
+                                    // show the oldest at the top so the most recent sits at the bottom.
+                                    ForEach(Array(directory.individuals.reversed())) { item in
+                                        SidebarRow(
+                                            title: item.name,
+                                            subtitle: nil,
+                                            showAvatar: false,
+                                            avatarData: nil,
+                                            isSelected: directory.selectedSessionJid == item.jid,
+                                            isComposing: xmpp.composingJids.contains(item.jid),
+                                            unreadCount: chatStore.unreadCount(for: item.jid),
+                                            onCancel: {
+                                                xmpp.sendMessage(to: item.jid, body: "/cancel")
+                                            }
+                                        ) {
+                                            directory.selectIndividual(item)
+                                        }
+                                        .id(item.jid)
+                                        .padding(.horizontal, 10)
+                                    }
+                                } else if !directory.isLoadingIndividuals {
                                     SidebarPlaceholderRow(
                                         title: "No sessions",
                                         subtitle: "This dispatcher has no active sessions",
@@ -189,85 +196,60 @@ private struct SidebarList: View {
                                     )
                                     .padding(.horizontal, 10)
                                 }
-                            } else {
-                                // directory.individuals is sorted by recency (most recent first);
-                                // show the oldest at the top so the most recent sits at the bottom.
-                                ForEach(Array(directory.individuals.reversed())) { item in
-                                    SidebarRow(
-                                        title: item.name,
-                                        subtitle: nil,
-                                        showAvatar: false,
-                                        avatarData: nil,
-                                        isSelected: directory.selectedSessionJid == item.jid,
-                                        isComposing: xmpp.composingJids.contains(item.jid),
-                                        unreadCount: chatStore.unreadCount(for: item.jid),
-                                        onCancel: {
-                                            xmpp.sendMessage(to: item.jid, body: "/cancel")
-                                        }
-                                    ) {
-                                        directory.selectIndividual(item)
-                                    }
-                                    .id(item.jid)
-                                    .padding(.horizontal, 10)
-                                }
-                            }
 
-                            Color.clear
-                                .frame(height: 1)
-                                .id(ScrollAnchor.bottom)
-                                .background(
-                                    GeometryReader { g in
-                                        Color.clear.preference(
-                                            key: BottomMarkerMinYKey.self,
-                                            value: g.frame(in: .named("sessionsScroll")).minY
-                                        )
-                                    }
-                                )
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id(ScrollAnchor.bottom)
+                                    .background(
+                                        GeometryReader { g in
+                                            Color.clear.preference(
+                                                key: BottomMarkerMinYKey.self,
+                                                value: g.frame(in: .named("sessionsScroll")).minY
+                                            )
+                                        }
+                                    )
+                            }
+                        }
+                        // When the list is too short to fill the viewport, keep it anchored
+                        // to the bottom and put the empty space at the top.
+                        .frame(minHeight: g.size.height, alignment: .bottom)
+                        .padding(.bottom, 10)
+                    }
+                    .coordinateSpace(name: "sessionsScroll")
+                    .onAppear {
+                        scrollViewHeight = g.size.height
+                        // Scroll when sessions appear; this handles the "start at bottom" expectation.
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
                         }
                     }
-                    // When the list is too short to fill the viewport, keep it anchored
-                    // to the bottom and put the empty space at the top.
-                    .frame(minHeight: scrollViewHeight, alignment: .bottom)
-                    .padding(.bottom, 10)
-                }
-                .coordinateSpace(name: "sessionsScroll")
-                .background(
-                    GeometryReader { g in
-                        Color.clear.preference(key: ScrollViewHeightKey.self, value: g.size.height)
+                    .onChange(of: g.size.height) { newValue in
+                        scrollViewHeight = newValue
                     }
-                )
-                .onPreferenceChange(ScrollViewHeightKey.self) { newValue in
-                    scrollViewHeight = newValue
-                }
-                .onPreferenceChange(BottomMarkerMinYKey.self) { newValue in
-                    bottomMarkerMinY = newValue
-                    let atBottom = bottomMarkerMinY <= scrollViewHeight + 16
-                    stickToBottom = atBottom
-                }
-                .onAppear {
-                    // Scroll when sessions appear; this handles the "start at bottom" expectation.
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                    .onPreferenceChange(BottomMarkerMinYKey.self) { newValue in
+                        bottomMarkerMinY = newValue
+                        let atBottom = bottomMarkerMinY <= scrollViewHeight + 16
+                        stickToBottom = atBottom
                     }
-                }
-                .onChange(of: directory.selectedDispatcherJid) { _ in
-                    // Switching dispatchers changes the sessions set; default to bottom again.
-                    didInitialScroll = false
-                    stickToBottom = true
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
-                    }
-                }
-                .onChange(of: directory.individuals.count) { _ in
-                    guard stickToBottom else { return }
-                    DispatchQueue.main.async {
-                        if didInitialScroll {
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
-                            }
-                        } else {
+                    .onChange(of: directory.selectedDispatcherJid) { _ in
+                        // Switching dispatchers changes the sessions set; default to bottom again.
+                        didInitialScroll = false
+                        stickToBottom = true
+                        DispatchQueue.main.async {
                             proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
-                            didInitialScroll = true
+                        }
+                    }
+                    .onChange(of: directory.individuals.count) { _ in
+                        guard stickToBottom else { return }
+                        DispatchQueue.main.async {
+                            if didInitialScroll {
+                                withAnimation(.easeOut(duration: 0.18)) {
+                                    proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                                }
+                            } else {
+                                proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                                didInitialScroll = true
+                            }
                         }
                     }
                 }
@@ -385,11 +367,13 @@ private struct SidebarSectionHeader: View {
     let title: String
     let count: Int?
     let detail: String?
+    let isLoading: Bool
 
-    init(title: String, count: Int? = nil, detail: String? = nil) {
+    init(title: String, count: Int? = nil, detail: String? = nil, isLoading: Bool = false) {
         self.title = title
         self.count = count
         self.detail = detail
+        self.isLoading = isLoading
     }
 
     var body: some View {
@@ -409,6 +393,10 @@ private struct SidebarSectionHeader: View {
                     .clipShape(Capsule(style: .continuous))
             }
             Spacer()
+            if isLoading {
+                ProgressView()
+                    .scaleEffect(0.55)
+            }
             if let count {
                 Text("\(count)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
