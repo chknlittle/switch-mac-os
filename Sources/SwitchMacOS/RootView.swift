@@ -293,7 +293,13 @@ private struct SidebarPlaceholderRow: View {
 private struct SidebarSectionHeader: View {
     let title: String
     let count: Int?
-    let detail: String? = nil
+    let detail: String?
+
+    init(title: String, count: Int? = nil, detail: String? = nil) {
+        self.title = title
+        self.count = count
+        self.detail = detail
+    }
 
     var body: some View {
         HStack(spacing: 8) {
