@@ -251,26 +251,6 @@ private struct SidebarList: View {
                         }
                     }
 
-                    HStack(spacing: 6) {
-                        if directory.isLoadingIndividuals {
-                            ProgressView()
-                                .scaleEffect(0.55)
-                        }
-                        Text("\(directory.individuals.count)")
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.badgeBg)
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .stroke(Theme.badgeBorder, lineWidth: 1)
-                    )
-                    .clipShape(Capsule(style: .continuous))
-                    .padding(.trailing, 10)
-                    .padding(.bottom, 8)
-                    .allowsHitTesting(false)
                 }
             }
 
@@ -278,7 +258,7 @@ private struct SidebarList: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 6) {
-                    SidebarSectionHeader(title: "Dispatchers", count: directory.dispatchers.count, detail: selectedDispatcherName)
+                    SidebarSectionHeader(title: "Dispatchers", detail: selectedDispatcherName)
                         .padding(.horizontal, 10)
                         .padding(.top, 8)
 
