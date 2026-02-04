@@ -157,116 +157,118 @@ private struct SidebarList: View {
     var body: some View {
         VStack(spacing: 0) {
             GeometryReader { g in
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Spacer(minLength: 0)
+                ZStack(alignment: .bottomTrailing) {
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                Spacer(minLength: 0)
 
-                            LazyVStack(alignment: .leading, spacing: 0) {
-                                if !directory.individuals.isEmpty {
-                                    // directory.individuals is sorted by recency (most recent first);
-                                    // show the oldest at the top so the most recent sits at the bottom.
-                                    ForEach(Array(directory.individuals.reversed())) { item in
-                                        SidebarRow(
-                                            title: item.name,
-                                            subtitle: nil,
-                                            showAvatar: false,
-                                            avatarData: nil,
-                                            isSelected: directory.selectedSessionJid == item.jid,
-                                            isComposing: xmpp.composingJids.contains(item.jid),
-                                            unreadCount: chatStore.unreadCount(for: item.jid),
-                                            onCancel: {
-                                                xmpp.sendMessage(to: item.jid, body: "/cancel")
+                                LazyVStack(alignment: .leading, spacing: 0) {
+                                    if !directory.individuals.isEmpty {
+                                        // directory.individuals is sorted by recency (most recent first);
+                                        // show the oldest at the top so the most recent sits at the bottom.
+                                        ForEach(Array(directory.individuals.reversed())) { item in
+                                            SidebarRow(
+                                                title: item.name,
+                                                subtitle: nil,
+                                                showAvatar: false,
+                                                avatarData: nil,
+                                                isSelected: directory.selectedSessionJid == item.jid,
+                                                isComposing: xmpp.composingJids.contains(item.jid),
+                                                unreadCount: chatStore.unreadCount(for: item.jid),
+                                                onCancel: {
+                                                    xmpp.sendMessage(to: item.jid, body: "/cancel")
+                                                }
+                                            ) {
+                                                directory.selectIndividual(item)
                                             }
-                                        ) {
-                                            directory.selectIndividual(item)
+                                            .id(item.jid)
+                                            .padding(.horizontal, 10)
                                         }
-                                        .id(item.jid)
+                                    } else if !directory.isLoadingIndividuals {
+                                        SidebarPlaceholderRow(
+                                            title: "No sessions",
+                                            subtitle: "This dispatcher has no active sessions",
+                                            isLoading: false
+                                        )
                                         .padding(.horizontal, 10)
                                     }
-                                } else if !directory.isLoadingIndividuals {
-                                    SidebarPlaceholderRow(
-                                        title: "No sessions",
-                                        subtitle: "This dispatcher has no active sessions",
-                                        isLoading: false
-                                    )
-                                    .padding(.horizontal, 10)
-                                }
 
-                                Color.clear
-                                    .frame(height: 1)
-                                    .id(ScrollAnchor.bottom)
-                                    .background(
-                                        GeometryReader { g in
-                                            Color.clear.preference(
-                                                key: BottomMarkerMinYKey.self,
-                                                value: g.frame(in: .named("sessionsScroll")).minY
-                                            )
-                                        }
-                                    )
-                            }
-                        }
-                        // When the list is too short to fill the viewport, keep it anchored
-                        // to the bottom and put the empty space at the top.
-                        .frame(minHeight: g.size.height, alignment: .bottom)
-                        .padding(.bottom, 10)
-                    }
-                    .coordinateSpace(name: "sessionsScroll")
-                    .onAppear {
-                        scrollViewHeight = g.size.height
-                        // Scroll when sessions appear; this handles the "start at bottom" expectation.
-                        DispatchQueue.main.async {
-                            proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
-                        }
-                    }
-                    .onChange(of: g.size.height) { newValue in
-                        scrollViewHeight = newValue
-                    }
-                    .onPreferenceChange(BottomMarkerMinYKey.self) { newValue in
-                        bottomMarkerMinY = newValue
-                        let atBottom = bottomMarkerMinY <= scrollViewHeight + 16
-                        stickToBottom = atBottom
-                    }
-                    .onChange(of: directory.selectedDispatcherJid) { _ in
-                        // Switching dispatchers changes the sessions set; default to bottom again.
-                        didInitialScroll = false
-                        stickToBottom = true
-                        DispatchQueue.main.async {
-                            proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
-                        }
-                    }
-                    .onChange(of: directory.individuals.count) { _ in
-                        guard stickToBottom else { return }
-                        DispatchQueue.main.async {
-                            if didInitialScroll {
-                                withAnimation(.easeOut(duration: 0.18)) {
-                                    proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                                    Color.clear
+                                        .frame(height: 1)
+                                        .id(ScrollAnchor.bottom)
+                                        .background(
+                                            GeometryReader { g in
+                                                Color.clear.preference(
+                                                    key: BottomMarkerMinYKey.self,
+                                                    value: g.frame(in: .named("sessionsScroll")).minY
+                                                )
+                                            }
+                                        )
                                 }
-                            } else {
+                            }
+                            // When the list is too short to fill the viewport, keep it anchored
+                            // to the bottom and put the empty space at the top.
+                            .frame(minHeight: g.size.height, alignment: .bottom)
+                            .padding(.bottom, 10)
+                        }
+                        .coordinateSpace(name: "sessionsScroll")
+                        .onAppear {
+                            scrollViewHeight = g.size.height
+                            // Scroll when sessions appear; this handles the "start at bottom" expectation.
+                            DispatchQueue.main.async {
                                 proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
-                                didInitialScroll = true
+                            }
+                        }
+                        .onChange(of: g.size.height) { newValue in
+                            scrollViewHeight = newValue
+                        }
+                        .onPreferenceChange(BottomMarkerMinYKey.self) { newValue in
+                            bottomMarkerMinY = newValue
+                            let atBottom = bottomMarkerMinY <= scrollViewHeight + 16
+                            stickToBottom = atBottom
+                        }
+                        .onChange(of: directory.selectedDispatcherJid) { _ in
+                            // Switching dispatchers changes the sessions set; default to bottom again.
+                            didInitialScroll = false
+                            stickToBottom = true
+                            DispatchQueue.main.async {
+                                proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                            }
+                        }
+                        .onChange(of: directory.individuals.count) { _ in
+                            guard stickToBottom else { return }
+                            DispatchQueue.main.async {
+                                if didInitialScroll {
+                                    withAnimation(.easeOut(duration: 0.18)) {
+                                        proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                                    }
+                                } else {
+                                    proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                                    didInitialScroll = true
+                                }
                             }
                         }
                     }
-                }
-            }
 
-            HStack(spacing: 8) {
-                Text("Sessions")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                if directory.isLoadingIndividuals {
-                    ProgressView()
-                        .scaleEffect(0.55)
+                    HStack(spacing: 6) {
+                        if directory.isLoadingIndividuals {
+                            ProgressView()
+                                .scaleEffect(0.55)
+                        }
+                        Text("\(directory.individuals.count)")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.10))
+                    .clipShape(Capsule(style: .continuous))
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 8)
+                    .allowsHitTesting(false)
                 }
-                Text("\(directory.individuals.count)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
-            .padding(.bottom, 8)
 
             Divider()
 
