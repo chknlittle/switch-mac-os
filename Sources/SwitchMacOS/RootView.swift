@@ -262,7 +262,11 @@ private struct SidebarList: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.secondary.opacity(0.10))
+                    .background(Color.accentColor.opacity(0.09))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.14), lineWidth: 1)
+                    )
                     .clipShape(Capsule(style: .continuous))
                     .padding(.trailing, 10)
                     .padding(.bottom, 8)
@@ -356,7 +360,7 @@ private struct SidebarPlaceholderRow: View {
             } else {
                 Image(systemName: "circle.dashed")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.accentColor.opacity(0.55))
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -402,7 +406,11 @@ private struct SidebarSectionHeader: View {
                     .truncationMode(.middle)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background(Color.secondary.opacity(0.10))
+                    .background(Color.accentColor.opacity(0.09))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.12), lineWidth: 1)
+                    )
                     .clipShape(Capsule(style: .continuous))
             }
             Spacer()
@@ -488,7 +496,7 @@ private struct AvatarCircle: View {
             Circle()
                 .fill(
                     LinearGradient(
-                        colors: [Color.accentColor.opacity(0.22), Color.secondary.opacity(0.18)],
+                        colors: [Color.accentColor.opacity(0.28), Color.accentColor.opacity(0.10)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -507,7 +515,7 @@ private struct AvatarCircle: View {
         .frame(width: 22, height: 22)
         .clipShape(Circle())
         .overlay(
-            Circle().stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+            Circle().stroke(Color.accentColor.opacity(0.12), lineWidth: 1)
         )
     }
 }
@@ -526,7 +534,11 @@ private struct UnreadBadge: View {
             .foregroundStyle(.primary.opacity(0.85))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.14))
+            .background(Color.accentColor.opacity(0.16))
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+            )
             .clipShape(Capsule())
     }
 }
