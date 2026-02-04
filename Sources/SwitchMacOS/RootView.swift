@@ -605,21 +605,19 @@ private struct ChatBackdropOverlay: View {
 private extension NSColor {
     func withSaturationMultiplier(_ m: CGFloat) -> NSColor {
         guard let rgb = usingColorSpace(.deviceRGB) else { return self }
-        var h: CGFloat = 0
-        var s: CGFloat = 0
-        var b: CGFloat = 0
-        var a: CGFloat = 0
-        guard rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a) else { return self }
+        let h = rgb.hueComponent
+        let s = rgb.saturationComponent
+        let b = rgb.brightnessComponent
+        let a = rgb.alphaComponent
         return NSColor(hue: h, saturation: max(0, min(1, s * m)), brightness: b, alpha: a)
     }
 
     func shiftHue(by delta: CGFloat) -> NSColor {
         guard let rgb = usingColorSpace(.deviceRGB) else { return self }
-        var h: CGFloat = 0
-        var s: CGFloat = 0
-        var b: CGFloat = 0
-        var a: CGFloat = 0
-        guard rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a) else { return self }
+        let h = rgb.hueComponent
+        let s = rgb.saturationComponent
+        let b = rgb.brightnessComponent
+        let a = rgb.alphaComponent
         var nh = h + delta
         while nh < 0 { nh += 1 }
         while nh > 1 { nh -= 1 }
