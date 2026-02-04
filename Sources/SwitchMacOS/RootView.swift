@@ -145,7 +145,8 @@ private struct SidebarList: View {
                             avatarData: nil,
                             isSelected: directory.chatTarget?.jid == chat.jid,
                             isComposing: xmpp.composingJids.contains(chat.jid),
-                            unreadCount: chatStore.unreadCount(for: chat.jid)
+                            unreadCount: chatStore.unreadCount(for: chat.jid),
+                            onCancel: nil
                         ) {
                             directory.openPinnedChat(jid: chat.jid)
                         }
@@ -154,22 +155,59 @@ private struct SidebarList: View {
             }
 
             Section(header: SidebarSectionHeader(title: "Dispatchers", count: directory.dispatchers.count)) {
-                ForEach(directory.dispatchers) { item in
-                    SidebarRow(
-                        title: item.name,
-                        subtitle: nil,
-                        showAvatar: true,
-                        avatarData: xmpp.avatarDataByJid[item.jid],
-                        isSelected: directory.selectedDispatcherJid == item.jid,
-                        isComposing: directory.dispatchersWithComposingSessions.contains(item.jid),
-                        unreadCount: directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
-                    ) {
-                        directory.selectDispatcher(item)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(directory.dispatchers) { item in
+                            let isSelected = directory.selectedDispatcherJid == item.jid
+                            let isComposing = directory.dispatchersWithComposingSessions.contains(item.jid)
+                            let unreadCount = directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
+
+                            Button {
+                                directory.selectDispatcher(item)
+                            } label: {
+                                ZStack(alignment: .topTrailing) {
+                                    ZStack(alignment: .bottomTrailing) {
+                                        AvatarCircle(imageData: xmpp.avatarDataByJid[item.jid], fallbackText: item.name)
+                                            .scaleEffect(1.2)
+                                            .frame(width: 30, height: 30)
+                                            .overlay(
+                                                Circle()
+                                                    .stroke(isSelected ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 2)
+                                            )
+
+                                        if isComposing {
+                                            ProgressView()
+                                                .scaleEffect(0.35)
+                                                .frame(width: 10, height: 10)
+                                                .padding(1)
+                                                .background(Color(NSColor.controlBackgroundColor))
+                                                .clipShape(Circle())
+                                                .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 1))
+                                                .offset(x: 6, y: 6)
+                                        }
+                                    }
+
+                                    if unreadCount > 0 {
+                                        UnreadBadge(count: unreadCount)
+                                            .scaleEffect(0.75)
+                                            .offset(x: 10, y: -10)
+                                    }
+                                }
+                                .frame(width: 30, height: 30)
+                                .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(item.name)
+                            .onAppear {
+                                xmpp.ensureAvatarLoaded(for: item.jid)
+                            }
+                        }
                     }
-                    .onAppear {
-                        xmpp.ensureAvatarLoaded(for: item.jid)
-                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 2)
                 }
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
 
             Section(header: SidebarSectionHeader(title: "Sessions", count: directory.individuals.count)) {
@@ -196,7 +234,10 @@ private struct SidebarList: View {
                             avatarData: nil,
                             isSelected: directory.selectedSessionJid == item.jid,
                             isComposing: xmpp.composingJids.contains(item.jid),
-                            unreadCount: chatStore.unreadCount(for: item.jid)
+                            unreadCount: chatStore.unreadCount(for: item.jid),
+                            onCancel: {
+                                xmpp.sendMessage(to: item.jid, body: "/cancel")
+                            }
                         ) {
                             directory.selectIndividual(item)
                         }
@@ -272,6 +313,7 @@ private struct SidebarRow: View {
     let isSelected: Bool
     let isComposing: Bool
     let unreadCount: Int
+    let onCancel: (() -> Void)?
     let onSelect: () -> Void
 
     var body: some View {
@@ -294,6 +336,15 @@ private struct SidebarRow: View {
                 ProgressView()
                     .scaleEffect(0.5)
                     .frame(width: 16, height: 16)
+                if let onCancel {
+                    Button(action: onCancel) {
+                        Image(systemName: "stop.circle")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Send /cancel")
+                }
             }
             if unreadCount > 0 {
                 UnreadBadge(count: unreadCount)
@@ -479,12 +530,6 @@ private struct ChatPane: View {
     let isEnabled: Bool
     let isTyping: Bool
 
-    private var canCancel: Bool {
-        guard isEnabled else { return false }
-        let jid = (threadJid ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return !jid.isEmpty
-    }
-
     private let bottomAnchorId: String = "__bottom__"
     private let composerMinHeight: CGFloat = 28
     private let composerMaxHeight: CGFloat = 160
@@ -504,13 +549,6 @@ private struct ChatPane: View {
                     Text("typing...")
                         .font(.system(size: 11, weight: .regular, design: .default))
                         .foregroundStyle(.secondary)
-                    Button("Stop") {
-                        sendCancel()
-                    }
-                    .controlSize(.small)
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                    .help("Send /cancel")
                 }
                 Spacer()
             }
@@ -596,17 +634,6 @@ private struct ChatPane: View {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(Color(NSColor.controlBackgroundColor))
                     )
-                    Button {
-                        sendCancel()
-                    } label: {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(canCancel ? (isTyping ? Color.red : Color.secondary) : Color.secondary.opacity(0.5))
-                    .disabled(!canCancel)
-                    .help("Send /cancel")
-                    .keyboardShortcut(.escape, modifiers: [])
                     Button("Send") { onSend() }
                         .disabled(!isEnabled || !hasSendableContent)
                 }
@@ -682,12 +709,6 @@ private struct ChatPane: View {
             try? await Task.sleep(nanoseconds: 120_000_000)
             scrollNow()
         }
-    }
-
-    private func sendCancel() {
-        let jid = (threadJid ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !jid.isEmpty else { return }
-        xmpp.sendMessage(to: jid, body: "/cancel")
     }
 
     private struct MessageRow: View {
