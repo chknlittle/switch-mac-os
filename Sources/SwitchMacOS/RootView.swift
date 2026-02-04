@@ -136,6 +136,29 @@ private struct SidebarList: View {
     @ObservedObject var chatStore: ChatStore
     let pinnedChats: [PinnedChat]
 
+    private enum ScrollAnchor {
+        static let bottom = "__bottom__"
+    }
+
+    private struct ScrollViewHeightKey: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            value = nextValue()
+        }
+    }
+
+    private struct BottomMarkerMinYKey: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            value = nextValue()
+        }
+    }
+
+    @State private var scrollViewHeight: CGFloat = 0
+    @State private var bottomMarkerMinY: CGFloat = 0
+    @State private var stickToBottom: Bool = true
+    @State private var didInitialScroll: Bool = false
+
     private var selectedAssistantName: String? {
         guard let jid = directory.chatTarget?.jid else { return nil }
         return pinnedChats.first(where: { $0.jid == jid })?.title
@@ -147,159 +170,243 @@ private struct SidebarList: View {
     }
 
     var body: some View {
-        List {
-            Section(header: SidebarSectionHeader(title: "Sessions", count: directory.individuals.count)) {
-                if directory.individuals.isEmpty {
-                    if directory.isLoadingIndividuals && !directory.individualsLoadedOnce {
-                        SidebarPlaceholderRow(
-                            title: "Loading sessions...",
-                            subtitle: "If this takes long, use Refresh",
-                            isLoading: true
-                        )
-                    } else {
-                        SidebarPlaceholderRow(
-                            title: "No sessions",
-                            subtitle: "This dispatcher has no active sessions",
-                            isLoading: false
-                        )
-                    }
-                } else {
-                    // directory.individuals is sorted by recency (most recent first);
-                    // show the oldest at the top so the most recent sits at the bottom.
-                    ForEach(Array(directory.individuals.reversed())) { item in
-                        SidebarRow(
-                            title: item.name,
-                            subtitle: nil,
-                            showAvatar: false,
-                            avatarData: nil,
-                            isSelected: directory.selectedSessionJid == item.jid,
-                            isComposing: xmpp.composingJids.contains(item.jid),
-                            unreadCount: chatStore.unreadCount(for: item.jid),
-                            onCancel: {
-                                xmpp.sendMessage(to: item.jid, body: "/cancel")
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        SidebarSectionHeader(title: "Sessions", count: directory.individuals.count)
+                            .padding(.horizontal, 10)
+                            .padding(.top, 8)
+
+                        if directory.individuals.isEmpty {
+                            if directory.isLoadingIndividuals && !directory.individualsLoadedOnce {
+                                SidebarPlaceholderRow(
+                                    title: "Loading sessions...",
+                                    subtitle: "If this takes long, use Refresh",
+                                    isLoading: true
+                                )
+                                .padding(.horizontal, 10)
+                            } else {
+                                SidebarPlaceholderRow(
+                                    title: "No sessions",
+                                    subtitle: "This dispatcher has no active sessions",
+                                    isLoading: false
+                                )
+                                .padding(.horizontal, 10)
                             }
-                        ) {
-                            directory.selectIndividual(item)
-                        }
-                    }
-                }
-            }
-
-            Section(header: SidebarSectionHeader(title: "Dispatchers", count: directory.dispatchers.count, detail: selectedDispatcherName)) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(directory.dispatchers) { item in
-                            let isSelected = directory.selectedDispatcherJid == item.jid
-                            let isComposing = directory.dispatchersWithComposingSessions.contains(item.jid)
-                            let unreadCount = directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
-
-                            Button {
-                                directory.selectDispatcher(item)
-                            } label: {
-                                ZStack(alignment: .topTrailing) {
-                                    ZStack(alignment: .bottomTrailing) {
-                                        AvatarCircle(imageData: xmpp.avatarDataByJid[item.jid], fallbackText: item.name)
-                                            .scaleEffect(1.2)
-                                            .frame(width: 30, height: 30)
-                                            .overlay(
-                                                Circle()
-                                                    .stroke(isSelected ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 2)
-                                            )
-
-                                        if isComposing {
-                                            ProgressView()
-                                                .scaleEffect(0.35)
-                                                .frame(width: 10, height: 10)
-                                                .padding(1)
-                                                .background(Color(NSColor.controlBackgroundColor))
-                                                .clipShape(Circle())
-                                                .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 1))
-                                                .offset(x: 6, y: 6)
-                                        }
+                        } else {
+                            // directory.individuals is sorted by recency (most recent first);
+                            // show the oldest at the top so the most recent sits at the bottom.
+                            ForEach(Array(directory.individuals.reversed())) { item in
+                                SidebarRow(
+                                    title: item.name,
+                                    subtitle: nil,
+                                    showAvatar: false,
+                                    avatarData: nil,
+                                    isSelected: directory.selectedSessionJid == item.jid,
+                                    isComposing: xmpp.composingJids.contains(item.jid),
+                                    unreadCount: chatStore.unreadCount(for: item.jid),
+                                    onCancel: {
+                                        xmpp.sendMessage(to: item.jid, body: "/cancel")
                                     }
-
-                                    if unreadCount > 0 {
-                                        UnreadBadge(count: unreadCount)
-                                            .scaleEffect(0.75)
-                                            .offset(x: 10, y: -10)
-                                    }
+                                ) {
+                                    directory.selectIndividual(item)
                                 }
-                                .frame(width: 30, height: 30)
-                                .contentShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                            .help(item.name)
-                            .onAppear {
-                                xmpp.ensureAvatarLoaded(for: item.jid)
+                                .id(item.jid)
+                                .padding(.horizontal, 10)
                             }
                         }
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id(ScrollAnchor.bottom)
+                            .background(
+                                GeometryReader { g in
+                                    Color.clear.preference(
+                                        key: BottomMarkerMinYKey.self,
+                                        value: g.frame(in: .named("sessionsScroll")).minY
+                                    )
+                                }
+                            )
                     }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 2)
+                    .padding(.bottom, 10)
                 }
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
+                .coordinateSpace(name: "sessionsScroll")
+                .background(
+                    GeometryReader { g in
+                        Color.clear.preference(key: ScrollViewHeightKey.self, value: g.size.height)
+                    }
+                )
+                .onPreferenceChange(ScrollViewHeightKey.self) { newValue in
+                    scrollViewHeight = newValue
+                }
+                .onPreferenceChange(BottomMarkerMinYKey.self) { newValue in
+                    bottomMarkerMinY = newValue
+                    let atBottom = bottomMarkerMinY <= scrollViewHeight + 16
+                    stickToBottom = atBottom
+                }
+                .onAppear {
+                    // Scroll when sessions appear; this handles the "start at bottom" expectation.
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                    }
+                }
+                .onChange(of: directory.selectedDispatcherJid) { _ in
+                    // Switching dispatchers changes the sessions set; default to bottom again.
+                    didInitialScroll = false
+                    stickToBottom = true
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                    }
+                }
+                .onChange(of: directory.individuals.count) { _ in
+                    guard stickToBottom else { return }
+                    DispatchQueue.main.async {
+                        if didInitialScroll {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                            }
+                        } else {
+                            proxy.scrollTo(ScrollAnchor.bottom, anchor: .bottom)
+                            didInitialScroll = true
+                        }
+                    }
+                }
             }
 
-            if !pinnedChats.isEmpty {
-                Section(header: SidebarSectionHeader(title: "Assistants", count: pinnedChats.count, detail: selectedAssistantName)) {
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    SidebarSectionHeader(title: "Dispatchers", count: directory.dispatchers.count, detail: selectedDispatcherName)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 8)
+
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
-                            ForEach(pinnedChats) { chat in
-                                let isSelected = directory.chatTarget?.jid == chat.jid
-                                let isComposing = xmpp.composingJids.contains(chat.jid)
-                                let unreadCount = chatStore.unreadCount(for: chat.jid)
+                            if directory.dispatchers.isEmpty {
+                                Text("Loading dispatchers...")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.vertical, 6)
+                            } else {
+                                ForEach(directory.dispatchers) { item in
+                                    let isSelected = directory.selectedDispatcherJid == item.jid
+                                    let isComposing = directory.dispatchersWithComposingSessions.contains(item.jid)
+                                    let unreadCount = directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
 
-                                Button {
-                                    directory.openPinnedChat(jid: chat.jid)
-                                } label: {
-                                    ZStack(alignment: .topTrailing) {
-                                        ZStack(alignment: .bottomTrailing) {
-                                            AvatarCircle(imageData: xmpp.avatarDataByJid[chat.jid], fallbackText: chat.title)
-                                                .scaleEffect(1.2)
-                                                .frame(width: 30, height: 30)
-                                                .overlay(
-                                                    Circle()
-                                                        .stroke(isSelected ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 2)
-                                                )
+                                    Button {
+                                        directory.selectDispatcher(item)
+                                    } label: {
+                                        ZStack(alignment: .topTrailing) {
+                                            ZStack(alignment: .bottomTrailing) {
+                                                AvatarCircle(imageData: xmpp.avatarDataByJid[item.jid], fallbackText: item.name)
+                                                    .scaleEffect(1.2)
+                                                    .frame(width: 30, height: 30)
+                                                    .overlay(
+                                                        Circle()
+                                                            .stroke(isSelected ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 2)
+                                                    )
 
-                                            if isComposing {
-                                                ProgressView()
-                                                    .scaleEffect(0.35)
-                                                    .frame(width: 10, height: 10)
-                                                    .padding(1)
-                                                    .background(Color(NSColor.controlBackgroundColor))
-                                                    .clipShape(Circle())
-                                                    .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 1))
-                                                    .offset(x: 6, y: 6)
+                                                if isComposing {
+                                                    ProgressView()
+                                                        .scaleEffect(0.35)
+                                                        .frame(width: 10, height: 10)
+                                                        .padding(1)
+                                                        .background(Color(NSColor.controlBackgroundColor))
+                                                        .clipShape(Circle())
+                                                        .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 1))
+                                                        .offset(x: 6, y: 6)
+                                                }
+                                            }
+
+                                            if unreadCount > 0 {
+                                                UnreadBadge(count: unreadCount)
+                                                    .scaleEffect(0.75)
+                                                    .offset(x: 10, y: -10)
                                             }
                                         }
-
-                                        if unreadCount > 0 {
-                                            UnreadBadge(count: unreadCount)
-                                                .scaleEffect(0.75)
-                                                .offset(x: 10, y: -10)
-                                        }
+                                        .frame(width: 30, height: 30)
+                                        .contentShape(Circle())
                                     }
-                                    .frame(width: 30, height: 30)
-                                    .contentShape(Circle())
-                                }
-                                .buttonStyle(.plain)
-                                .help(chat.title)
-                                .onAppear {
-                                    xmpp.ensureAvatarLoaded(for: chat.jid)
+                                    .buttonStyle(.plain)
+                                    .help(item.name)
+                                    .onAppear {
+                                        xmpp.ensureAvatarLoaded(for: item.jid)
+                                    }
                                 }
                             }
                         }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 2)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 6)
                     }
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    SidebarSectionHeader(title: "Assistants", count: pinnedChats.count, detail: selectedAssistantName)
+                        .padding(.horizontal, 10)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            if pinnedChats.isEmpty {
+                                Text("No pinned assistants")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.vertical, 6)
+                            } else {
+                                ForEach(pinnedChats) { chat in
+                                    let isSelected = directory.chatTarget?.jid == chat.jid
+                                    let isComposing = xmpp.composingJids.contains(chat.jid)
+                                    let unreadCount = chatStore.unreadCount(for: chat.jid)
+
+                                    Button {
+                                        directory.openPinnedChat(jid: chat.jid)
+                                    } label: {
+                                        ZStack(alignment: .topTrailing) {
+                                            ZStack(alignment: .bottomTrailing) {
+                                                AvatarCircle(imageData: xmpp.avatarDataByJid[chat.jid], fallbackText: chat.title)
+                                                    .scaleEffect(1.2)
+                                                    .frame(width: 30, height: 30)
+                                                    .overlay(
+                                                        Circle()
+                                                            .stroke(isSelected ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 2)
+                                                    )
+
+                                                if isComposing {
+                                                    ProgressView()
+                                                        .scaleEffect(0.35)
+                                                        .frame(width: 10, height: 10)
+                                                        .padding(1)
+                                                        .background(Color(NSColor.controlBackgroundColor))
+                                                        .clipShape(Circle())
+                                                        .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 1))
+                                                        .offset(x: 6, y: 6)
+                                                }
+                                            }
+
+                                            if unreadCount > 0 {
+                                                UnreadBadge(count: unreadCount)
+                                                    .scaleEffect(0.75)
+                                                    .offset(x: 10, y: -10)
+                                            }
+                                        }
+                                        .frame(width: 30, height: 30)
+                                        .contentShape(Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(chat.title)
+                                    .onAppear {
+                                        xmpp.ensureAvatarLoaded(for: chat.jid)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 10)
+                    }
                 }
             }
         }
-        .listStyle(.inset)
     }
 }
 
@@ -424,10 +531,11 @@ private struct SidebarRow: View {
             }
         }
         .padding(.vertical, 6)
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
-        .listRowSeparator(.hidden)
-        .listRowBackground(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+        .background(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
 
