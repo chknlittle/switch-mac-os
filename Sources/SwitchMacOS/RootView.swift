@@ -133,6 +133,11 @@ private struct SidebarList: View {
     @ObservedObject var chatStore: ChatStore
     let pinnedChats: [PinnedChat]
 
+    private var selectedDispatcherName: String? {
+        guard let dispatcherJid = directory.selectedDispatcherJid else { return nil }
+        return directory.dispatchers.first(where: { $0.jid == dispatcherJid })?.name ?? dispatcherJid
+    }
+
     var body: some View {
         List {
             if !pinnedChats.isEmpty {
@@ -154,7 +159,7 @@ private struct SidebarList: View {
                 }
             }
 
-            Section(header: SidebarSectionHeader(title: "Dispatchers", count: directory.dispatchers.count)) {
+            Section(header: SidebarSectionHeader(title: "Dispatchers", count: directory.dispatchers.count, detail: selectedDispatcherName)) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         ForEach(directory.dispatchers) { item in
@@ -288,11 +293,24 @@ private struct SidebarPlaceholderRow: View {
 private struct SidebarSectionHeader: View {
     let title: String
     let count: Int?
+    let detail: String? = nil
 
     var body: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
+
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.10))
+                    .clipShape(Capsule(style: .continuous))
+            }
             Spacer()
             if let count {
                 Text("\(count)")
