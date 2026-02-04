@@ -185,13 +185,16 @@ private struct SidebarList: View {
                                             .id(item.jid)
                                             .padding(.horizontal, 10)
                                         }
-                                    } else if !directory.isLoadingIndividuals {
+                                    } else {
                                         SidebarPlaceholderRow(
-                                            title: "No sessions",
-                                            subtitle: "This dispatcher has no active sessions",
-                                            isLoading: false
+                                            title: directory.isLoadingIndividuals ? "Loading sessions..." : "No sessions",
+                                            subtitle: directory.isLoadingIndividuals ? nil : "This dispatcher has no active sessions",
+                                            isLoading: directory.isLoadingIndividuals
                                         )
                                         .padding(.horizontal, 10)
+                                        .transaction { txn in
+                                            txn.animation = nil
+                                        }
                                     }
 
                                     Color.clear
