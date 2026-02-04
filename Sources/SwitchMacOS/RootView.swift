@@ -262,10 +262,10 @@ private struct SidebarList: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.accentColor.opacity(0.09))
+                    .background(Theme.badgeBg)
                     .overlay(
                         Capsule(style: .continuous)
-                            .stroke(Color.accentColor.opacity(0.14), lineWidth: 1)
+                            .stroke(Theme.badgeBorder, lineWidth: 1)
                     )
                     .clipShape(Capsule(style: .continuous))
                     .padding(.trailing, 10)
@@ -343,7 +343,7 @@ private struct SidebarList: View {
                 }
             }
         }
-        .background(Theme.windowBg)
+        .background(TintedSurface(base: Theme.windowBg, tint: Theme.accent, opacity: 0.055))
     }
 }
 
@@ -361,7 +361,7 @@ private struct SidebarPlaceholderRow: View {
             } else {
                 Image(systemName: "circle.dashed")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.accentColor.opacity(0.55))
+                    .foregroundStyle(Theme.accent.opacity(0.62))
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -407,10 +407,10 @@ private struct SidebarSectionHeader: View {
                     .truncationMode(.middle)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.09))
+                    .background(Theme.chipBg)
                     .overlay(
                         Capsule(style: .continuous)
-                            .stroke(Color.accentColor.opacity(0.12), lineWidth: 1)
+                            .stroke(Theme.chipBorder, lineWidth: 1)
                     )
                     .clipShape(Capsule(style: .continuous))
             }
@@ -475,7 +475,7 @@ private struct SidebarRow: View {
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
-        .background(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+        .background(isSelected ? Theme.selectedRow : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
@@ -577,13 +577,16 @@ private enum Theme {
     }
 
     // ── Semantic accents (flat tints) ────────────────
-    static var accentSubtle: Color { accent.opacity(0.08) }
-    static var accentMedium: Color { accent.opacity(0.15) }
-    static var accentStrong: Color { accent.opacity(0.25) }
+    static var accentSubtle: Color { accent.opacity(0.11) }
+    static var accentMedium: Color { accent.opacity(0.21) }
+    static var accentStrong: Color { accent.opacity(0.34) }
 
     // ── Bubbles ──────────────────────────────────────
-    static var bubbleIncoming: Color { surfacePrimary }
+    static var bubbleIncoming: Color { surfaceRaised }
     static var bubbleOutgoing: Color { accentMedium }
+
+    // ── Interactive states ───────────────────────────
+    static var selectedRow: Color { accent.opacity(0.13) }
 
     // ── Badges / chips ───────────────────────────────
     static var badgeBg: Color { accentSubtle }
@@ -596,6 +599,19 @@ private enum Theme {
         Color(nsColor: .textBackgroundColor).opacity(0.6)
     }
     static var codeInlineBg: Color { accent.opacity(0.12) }
+}
+
+private struct TintedSurface: View {
+    let base: Color
+    let tint: Color
+    let opacity: Double
+
+    var body: some View {
+        ZStack {
+            base
+            tint.opacity(opacity).blendMode(.softLight)
+        }
+    }
 }
 
 private struct PendingImageAttachment {
@@ -756,7 +772,11 @@ private struct ChatPane: View {
                     }
                     .background(
                         ZStack {
-                            Color(NSColor.textBackgroundColor)
+                            TintedSurface(
+                                base: Color(NSColor.textBackgroundColor),
+                                tint: Theme.accent,
+                                opacity: 0.03
+                            )
                         }
                     )
                     // Force a fresh scroll view per thread so switching chats
@@ -828,7 +848,7 @@ private struct ChatPane: View {
             }
         }
         .frame(minWidth: 420)
-        .background(Theme.windowBg)
+        .background(TintedSurface(base: Theme.windowBg, tint: Theme.accent, opacity: 0.04))
         .onChange(of: composerText) { newValue in
             if newValue.isEmpty {
                 composerHeight = composerMinHeight
