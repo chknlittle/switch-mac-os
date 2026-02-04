@@ -343,7 +343,7 @@ private struct SidebarList: View {
                 }
             }
         }
-        .background(SidebarBackdrop())
+        .background(Theme.windowBg)
     }
 }
 
@@ -495,13 +495,7 @@ private struct AvatarCircle: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [Color.accentColor.opacity(0.28), Color.accentColor.opacity(0.10)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .fill(Theme.accentSubtle)
 
             if let imageData, let nsImage = NSImage(data: imageData) {
                 Image(nsImage: nsImage)
@@ -516,7 +510,7 @@ private struct AvatarCircle: View {
         .frame(width: 22, height: 22)
         .clipShape(Circle())
         .overlay(
-            Circle().stroke(Color.accentColor.opacity(0.12), lineWidth: 1)
+            Circle().stroke(Theme.border, lineWidth: 1)
         )
     }
 }
@@ -535,10 +529,10 @@ private struct UnreadBadge: View {
             .foregroundStyle(.primary.opacity(0.85))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Color.accentColor.opacity(0.16))
+            .background(Theme.badgeBg)
             .overlay(
                 Capsule(style: .continuous)
-                    .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+                    .stroke(Theme.badgeBorder, lineWidth: 1)
             )
             .clipShape(Capsule())
     }
@@ -547,82 +541,61 @@ private struct UnreadBadge: View {
 // MARK: - Color Theme
 
 private enum Theme {
+    // ── Core accent ──────────────────────────────────
     static var accent: Color {
-        Color(nsColor: NSColor.controlAccentColor)
+        Color(nsColor: .controlAccentColor)
     }
 
-    static var accentWarm: Color {
-        Color(nsColor: NSColor.controlAccentColor.shiftHue(by: -0.06).withSaturationMultiplier(0.85))
+    // ── Surfaces ─────────────────────────────────────
+    static var windowBg: Color {
+        Color(nsColor: .windowBackgroundColor)
+    }
+    static var surfacePrimary: Color {
+        Color(nsColor: .controlBackgroundColor)
+    }
+    static var surfaceRaised: Color {
+        Color(nsColor: .underPageBackgroundColor)
     }
 
-    static var accentCool: Color {
-        Color(nsColor: NSColor.controlAccentColor.shiftHue(by: 0.08).withSaturationMultiplier(0.85))
+    // ── Text ─────────────────────────────────────────
+    static var textPrimary: Color {
+        Color(nsColor: .labelColor)
+    }
+    static var textSecondary: Color {
+        Color(nsColor: .secondaryLabelColor)
+    }
+    static var textTertiary: Color {
+        Color(nsColor: .tertiaryLabelColor)
     }
 
-    static var incomingBubble: Color {
-        Color(nsColor: NSColor.controlBackgroundColor).opacity(0.85)
+    // ── Borders / separators ─────────────────────────
+    static var separator: Color {
+        Color(nsColor: .separatorColor)
     }
-}
-
-private struct SidebarBackdrop: View {
-    var body: some View {
-        ZStack {
-            Color(NSColor.windowBackgroundColor)
-            LinearGradient(
-                colors: [Theme.accentWarm.opacity(0.07), Theme.accentCool.opacity(0.05), Color.clear],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-    }
-}
-
-private struct ChatBackdrop: View {
-    var body: some View {
-        ZStack {
-            Color(NSColor.windowBackgroundColor)
-            RadialGradient(
-                colors: [Theme.accentCool.opacity(0.06), Color.clear],
-                center: .topLeading,
-                startRadius: 60,
-                endRadius: 460
-            )
-        }
-    }
-}
-
-private struct ChatBackdropOverlay: View {
-    var body: some View {
-        LinearGradient(
-            colors: [Theme.accentCool.opacity(0.03), Theme.accentWarm.opacity(0.02), Color.clear],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .allowsHitTesting(false)
-    }
-}
-
-private extension NSColor {
-    func withSaturationMultiplier(_ m: CGFloat) -> NSColor {
-        guard let rgb = usingColorSpace(.deviceRGB) else { return self }
-        let h = rgb.hueComponent
-        let s = rgb.saturationComponent
-        let b = rgb.brightnessComponent
-        let a = rgb.alphaComponent
-        return NSColor(hue: h, saturation: max(0, min(1, s * m)), brightness: b, alpha: a)
+    static var border: Color {
+        Color(nsColor: .tertiaryLabelColor).opacity(0.3)
     }
 
-    func shiftHue(by delta: CGFloat) -> NSColor {
-        guard let rgb = usingColorSpace(.deviceRGB) else { return self }
-        let h = rgb.hueComponent
-        let s = rgb.saturationComponent
-        let b = rgb.brightnessComponent
-        let a = rgb.alphaComponent
-        var nh = h + delta
-        while nh < 0 { nh += 1 }
-        while nh > 1 { nh -= 1 }
-        return NSColor(hue: nh, saturation: s, brightness: b, alpha: a)
+    // ── Semantic accents (flat tints) ────────────────
+    static var accentSubtle: Color { accent.opacity(0.08) }
+    static var accentMedium: Color { accent.opacity(0.15) }
+    static var accentStrong: Color { accent.opacity(0.25) }
+
+    // ── Bubbles ──────────────────────────────────────
+    static var bubbleIncoming: Color { surfacePrimary }
+    static var bubbleOutgoing: Color { accentMedium }
+
+    // ── Badges / chips ───────────────────────────────
+    static var badgeBg: Color { accentSubtle }
+    static var badgeBorder: Color { accent.opacity(0.18) }
+    static var chipBg: Color { accentSubtle }
+    static var chipBorder: Color { accent.opacity(0.12) }
+
+    // ── Code ─────────────────────────────────────────
+    static var codeBg: Color {
+        Color(nsColor: .textBackgroundColor).opacity(0.6)
     }
+    static var codeInlineBg: Color { accent.opacity(0.12) }
 }
 
 private struct PendingImageAttachment {
@@ -784,7 +757,6 @@ private struct ChatPane: View {
                     .background(
                         ZStack {
                             Color(NSColor.textBackgroundColor)
-                            ChatBackdropOverlay()
                         }
                     )
                     // Force a fresh scroll view per thread so switching chats
@@ -856,7 +828,7 @@ private struct ChatPane: View {
             }
         }
         .frame(minWidth: 420)
-        .background(ChatBackdrop())
+        .background(Theme.windowBg)
         .onChange(of: composerText) { newValue in
             if newValue.isEmpty {
                 composerHeight = composerMinHeight
@@ -960,7 +932,11 @@ private struct ChatPane: View {
                         MarkdownMessage(content: msg.body)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
-                            .background(bubbleBackground)
+                            .background(bubbleColor)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(bubbleBorder, lineWidth: 1)
+                            )
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
                     }
@@ -972,10 +948,10 @@ private struct ChatPane: View {
                                 .foregroundStyle(.secondary.opacity(0.8))
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
-                                .background(Theme.accentCool.opacity(0.10))
+                                .background(Theme.chipBg)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                        .stroke(Theme.accentCool.opacity(0.14), lineWidth: 1)
+                                        .stroke(Theme.chipBorder, lineWidth: 1)
                                 )
                                 .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                         }
@@ -1005,10 +981,10 @@ private struct ChatPane: View {
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(10)
-                .background(Theme.accentCool.opacity(0.08))
+                .background(Theme.codeBg)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Theme.accentCool.opacity(0.12), lineWidth: 1)
+                        .stroke(Theme.border, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .frame(maxWidth: 520, alignment: .leading)
@@ -1044,20 +1020,21 @@ private struct ChatPane: View {
             .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
         }
 
-        private var bubbleBackground: LinearGradient {
+        private var bubbleColor: Color {
             switch msg.direction {
             case .incoming:
-                return LinearGradient(
-                    colors: [Theme.incomingBubble, Theme.accentWarm.opacity(0.06)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                return Theme.bubbleIncoming
             case .outgoing:
-                return LinearGradient(
-                    colors: [Theme.accent.opacity(0.22), Theme.accentCool.opacity(0.18)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                return Theme.bubbleOutgoing
+            }
+        }
+
+        private var bubbleBorder: Color {
+            switch msg.direction {
+            case .incoming:
+                return Theme.border
+            case .outgoing:
+                return Theme.accentStrong
             }
         }
 
@@ -1095,7 +1072,11 @@ private struct ChatPane: View {
                     MarkdownMessage(content: caption)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(bubbleBackground)
+                        .background(bubbleColor)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(bubbleBorder, lineWidth: 1)
+                        )
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
 
@@ -1119,7 +1100,11 @@ private struct ChatPane: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .background(bubbleBackground)
+                    .background(bubbleColor)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(bubbleBorder, lineWidth: 1)
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
@@ -1161,20 +1146,21 @@ private struct ChatPane: View {
             return u.scheme == "http" || u.scheme == "https" || u.scheme == "file"
         }
 
-        private var bubbleBackground: LinearGradient {
+        private var bubbleColor: Color {
             switch direction {
             case .incoming:
-                return LinearGradient(
-                    colors: [Theme.incomingBubble, Theme.accentWarm.opacity(0.06)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                return Theme.bubbleIncoming
             case .outgoing:
-                return LinearGradient(
-                    colors: [Theme.accent.opacity(0.22), Theme.accentCool.opacity(0.18)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                return Theme.bubbleOutgoing
+            }
+        }
+
+        private var bubbleBorder: Color {
+            switch direction {
+            case .incoming:
+                return Theme.border
+            case .outgoing:
+                return Theme.accentStrong
             }
         }
 
