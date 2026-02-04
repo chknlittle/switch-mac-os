@@ -95,6 +95,9 @@ private struct DirectoryShellView: View {
         guard let target = directory.chatTarget else { return "Chat" }
         switch target {
         case .dispatcher(let jid):
+            if let pinned = pinnedChats.first(where: { $0.jid == jid }) {
+                return "Assistant: \(pinned.title)"
+            }
             return "Dispatcher: \(jid)"
         case .individual(let jid):
             return "Session: \(jid)"
@@ -133,6 +136,11 @@ private struct SidebarList: View {
     @ObservedObject var chatStore: ChatStore
     let pinnedChats: [PinnedChat]
 
+    private var selectedAssistantName: String? {
+        guard let jid = directory.chatTarget?.jid else { return nil }
+        return pinnedChats.first(where: { $0.jid == jid })?.title
+    }
+
     private var selectedDispatcherName: String? {
         guard let dispatcherJid = directory.selectedDispatcherJid else { return nil }
         return directory.dispatchers.first(where: { $0.jid == dispatcherJid })?.name ?? dispatcherJid
@@ -141,21 +149,60 @@ private struct SidebarList: View {
     var body: some View {
         List {
             if !pinnedChats.isEmpty {
-                Section(header: SidebarSectionHeader(title: "Pinned", count: pinnedChats.count)) {
-                    ForEach(pinnedChats) { chat in
-                        SidebarRow(
-                            title: chat.title,
-                            subtitle: chat.jid,
-                            showAvatar: false,
-                            avatarData: nil,
-                            isSelected: directory.chatTarget?.jid == chat.jid,
-                            isComposing: xmpp.composingJids.contains(chat.jid),
-                            unreadCount: chatStore.unreadCount(for: chat.jid),
-                            onCancel: nil
-                        ) {
-                            directory.openPinnedChat(jid: chat.jid)
+                Section(header: SidebarSectionHeader(title: "Assistants", count: pinnedChats.count, detail: selectedAssistantName)) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(pinnedChats) { chat in
+                                let isSelected = directory.chatTarget?.jid == chat.jid
+                                let isComposing = xmpp.composingJids.contains(chat.jid)
+                                let unreadCount = chatStore.unreadCount(for: chat.jid)
+
+                                Button {
+                                    directory.openPinnedChat(jid: chat.jid)
+                                } label: {
+                                    ZStack(alignment: .topTrailing) {
+                                        ZStack(alignment: .bottomTrailing) {
+                                            AvatarCircle(imageData: xmpp.avatarDataByJid[chat.jid], fallbackText: chat.title)
+                                                .scaleEffect(1.2)
+                                                .frame(width: 30, height: 30)
+                                                .overlay(
+                                                    Circle()
+                                                        .stroke(isSelected ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 2)
+                                                )
+
+                                            if isComposing {
+                                                ProgressView()
+                                                    .scaleEffect(0.35)
+                                                    .frame(width: 10, height: 10)
+                                                    .padding(1)
+                                                    .background(Color(NSColor.controlBackgroundColor))
+                                                    .clipShape(Circle())
+                                                    .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 1))
+                                                    .offset(x: 6, y: 6)
+                                            }
+                                        }
+
+                                        if unreadCount > 0 {
+                                            UnreadBadge(count: unreadCount)
+                                                .scaleEffect(0.75)
+                                                .offset(x: 10, y: -10)
+                                        }
+                                    }
+                                    .frame(width: 30, height: 30)
+                                    .contentShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .help(chat.title)
+                                .onAppear {
+                                    xmpp.ensureAvatarLoaded(for: chat.jid)
+                                }
+                            }
                         }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 2)
                     }
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
             }
 
