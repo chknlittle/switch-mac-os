@@ -715,6 +715,7 @@ private struct ChatPane: View {
     @State private var composerHeight: CGFloat = 28
     @State private var scrollTask: Task<Void, Never>? = nil
     @State private var isDropTarget: Bool = false
+    @State private var isTranscriptMode: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -730,6 +731,13 @@ private struct ChatPane: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+
+                Button(isTranscriptMode ? "Done" : "Select") {
+                    isTranscriptMode.toggle()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Select text across messages")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -739,37 +747,49 @@ private struct ChatPane: View {
             if !isEnabled {
                 EmptyChatView()
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(messages) { msg in
-                                MessageRow(msg: msg, xmpp: xmpp)
-                                    .id(msg.id)
-                            }
-                            Color.clear
-                                .frame(height: 1)
-                                .id(bottomAnchorId)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                    }
-                    .background(
-                        ZStack {
+                if isTranscriptMode {
+                    TranscriptTextView(text: transcriptText(messages))
+                        .background(
                             TintedSurface(
                                 base: Color(NSColor.textBackgroundColor),
                                 tint: Theme.accent,
                                 opacity: 0.03
                             )
+                        )
+                        .id((threadJid ?? "__no_thread__") + "__transcript__")
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(messages) { msg in
+                                    MessageRow(msg: msg, xmpp: xmpp)
+                                        .id(msg.id)
+                                }
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id(bottomAnchorId)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
                         }
-                    )
-                    // Force a fresh scroll view per thread so switching chats
-                    // doesn't carry over scroll position.
-                    .id(threadJid ?? "__no_thread__")
-                    .task(id: threadJid) {
-                        scrollToBottom(using: proxy)
-                    }
-                    .onChange(of: messages.last?.id) { _ in
-                        scrollToBottom(using: proxy)
+                        .background(
+                            ZStack {
+                                TintedSurface(
+                                    base: Color(NSColor.textBackgroundColor),
+                                    tint: Theme.accent,
+                                    opacity: 0.03
+                                )
+                            }
+                        )
+                        // Force a fresh scroll view per thread so switching chats
+                        // doesn't carry over scroll position.
+                        .id(threadJid ?? "__no_thread__")
+                        .task(id: threadJid) {
+                            scrollToBottom(using: proxy)
+                        }
+                        .onChange(of: messages.last?.id) { _ in
+                            scrollToBottom(using: proxy)
+                        }
                     }
                 }
             }
@@ -839,6 +859,7 @@ private struct ChatPane: View {
         }
         .onChange(of: threadJid) { _ in
             pendingImage = nil
+            isTranscriptMode = false
         }
     }
 
@@ -879,6 +900,7 @@ private struct ChatPane: View {
 
     private func scrollToBottom(using proxy: ScrollViewProxy) {
         guard isEnabled else { return }
+        guard !isTranscriptMode else { return }
 
         scrollTask?.cancel()
         scrollTask = Task { @MainActor in
@@ -897,6 +919,56 @@ private struct ChatPane: View {
             try? await Task.sleep(nanoseconds: 120_000_000)
             scrollNow()
         }
+    }
+
+    private func transcriptText(_ messages: [ChatMessage]) -> String {
+        func trimTrailingNewlines(_ s: String) -> String {
+            var out = s
+            while out.hasSuffix("\n") {
+                out.removeLast()
+            }
+            return out
+        }
+
+        func formatMessage(_ msg: ChatMessage) -> String {
+            let who = msg.direction == .outgoing ? "you" : "them"
+            let body = trimTrailingNewlines(msg.body)
+
+            if msg.meta?.type == .attachment, let atts = msg.meta?.attachments, !atts.isEmpty {
+                let lines = atts.map { att in
+                    let name = att.filename ?? att.publicUrl ?? att.localPath ?? "attachment"
+                    return "- " + name
+                }
+                if body.isEmpty {
+                    return "[" + who + "] attachments\n" + lines.joined(separator: "\n")
+                }
+                return "[" + who + "] " + body + "\n" + lines.joined(separator: "\n")
+            }
+
+            if msg.meta?.type == .question, let q = msg.meta?.question {
+                let qs = q.questions.compactMap { $0.question ?? $0.header }.filter { !$0.isEmpty }
+                if !qs.isEmpty {
+                    let rendered = qs.map { "- " + $0 }.joined(separator: "\n")
+                    if body.isEmpty {
+                        return "[" + who + "] question\n" + rendered
+                    }
+                    return "[" + who + "] " + body + "\n" + rendered
+                }
+            }
+
+            if body.isEmpty {
+                return "[" + who + "]"
+            }
+
+            return "[" + who + "] " + body
+        }
+
+        var parts: [String] = []
+        parts.reserveCapacity(messages.count)
+        for msg in messages {
+            parts.append(formatMessage(msg))
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     private struct MessageRow: View {
@@ -1460,6 +1532,59 @@ private struct ChatPane: View {
             .buttonStyle(.plain)
             .disabled(!isEnabled)
         }
+    }
+}
+
+private struct TranscriptTextView: NSViewRepresentable {
+    let text: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.allowsUndo = false
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.usesFindBar = true
+        textView.font = NSFont.systemFont(ofSize: 13)
+        textView.textColor = NSColor.labelColor
+        textView.textContainerInset = NSSize(width: 10, height: 8)
+        textView.textContainer?.widthTracksTextView = true
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: .greatestFiniteMagnitude)
+
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.documentView = textView
+        return scroll
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = nsView.documentView as? NSTextView else { return }
+
+        // Avoid blowing away an in-progress selection while the user is copying.
+        if textView.selectedRange.length > 0 {
+            return
+        }
+
+        if context.coordinator.lastText != text {
+            context.coordinator.lastText = text
+            textView.string = text
+            textView.scrollToEndOfDocument(nil)
+        }
+    }
+
+    final class Coordinator {
+        var lastText: String = ""
     }
 }
 
