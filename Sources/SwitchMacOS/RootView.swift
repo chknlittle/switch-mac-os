@@ -343,6 +343,7 @@ private struct SidebarList: View {
                 }
             }
         }
+        .background(SidebarBackdrop())
     }
 }
 
@@ -543,6 +544,89 @@ private struct UnreadBadge: View {
     }
 }
 
+// MARK: - Color Theme
+
+private enum Theme {
+    static var accent: Color {
+        Color(nsColor: NSColor.controlAccentColor)
+    }
+
+    static var accentWarm: Color {
+        Color(nsColor: NSColor.controlAccentColor.shiftHue(by: -0.06).withSaturationMultiplier(0.85))
+    }
+
+    static var accentCool: Color {
+        Color(nsColor: NSColor.controlAccentColor.shiftHue(by: 0.08).withSaturationMultiplier(0.85))
+    }
+
+    static var incomingBubble: Color {
+        Color(nsColor: NSColor.controlBackgroundColor).opacity(0.85)
+    }
+}
+
+private struct SidebarBackdrop: View {
+    var body: some View {
+        ZStack {
+            Color(NSColor.windowBackgroundColor)
+            LinearGradient(
+                colors: [Theme.accentWarm.opacity(0.07), Theme.accentCool.opacity(0.05), Color.clear],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+}
+
+private struct ChatBackdrop: View {
+    var body: some View {
+        ZStack {
+            Color(NSColor.windowBackgroundColor)
+            RadialGradient(
+                colors: [Theme.accentCool.opacity(0.06), Color.clear],
+                center: .topLeading,
+                startRadius: 60,
+                endRadius: 460
+            )
+        }
+    }
+}
+
+private struct ChatBackdropOverlay: View {
+    var body: some View {
+        LinearGradient(
+            colors: [Theme.accentCool.opacity(0.03), Theme.accentWarm.opacity(0.02), Color.clear],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .allowsHitTesting(false)
+    }
+}
+
+private extension NSColor {
+    func withSaturationMultiplier(_ m: CGFloat) -> NSColor {
+        guard let rgb = usingColorSpace(.deviceRGB) else { return self }
+        var h: CGFloat = 0
+        var s: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        guard rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a) else { return self }
+        return NSColor(hue: h, saturation: max(0, min(1, s * m)), brightness: b, alpha: a)
+    }
+
+    func shiftHue(by delta: CGFloat) -> NSColor {
+        guard let rgb = usingColorSpace(.deviceRGB) else { return self }
+        var h: CGFloat = 0
+        var s: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        guard rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a) else { return self }
+        var nh = h + delta
+        while nh < 0 { nh += 1 }
+        while nh > 1 { nh -= 1 }
+        return NSColor(hue: nh, saturation: s, brightness: b, alpha: a)
+    }
+}
+
 private struct PendingImageAttachment {
     let data: Data
     let filename: String
@@ -699,7 +783,12 @@ private struct ChatPane: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                     }
-                    .background(Color(NSColor.textBackgroundColor))
+                    .background(
+                        ZStack {
+                            Color(NSColor.textBackgroundColor)
+                            ChatBackdropOverlay()
+                        }
+                    )
                     // Force a fresh scroll view per thread so switching chats
                     // doesn't carry over scroll position.
                     .id(threadJid ?? "__no_thread__")
@@ -769,6 +858,7 @@ private struct ChatPane: View {
             }
         }
         .frame(minWidth: 420)
+        .background(ChatBackdrop())
         .onChange(of: composerText) { newValue in
             if newValue.isEmpty {
                 composerHeight = composerMinHeight
@@ -872,7 +962,7 @@ private struct ChatPane: View {
                         MarkdownMessage(content: msg.body)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
-                            .background(bubbleColor)
+                            .background(bubbleBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
                     }
@@ -884,7 +974,11 @@ private struct ChatPane: View {
                                 .foregroundStyle(.secondary.opacity(0.8))
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
-                                .background(Color.secondary.opacity(0.1))
+                                .background(Theme.accentCool.opacity(0.10))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                        .stroke(Theme.accentCool.opacity(0.14), lineWidth: 1)
+                                )
                                 .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                         }
                         if let stats = msg.meta?.runStats {
@@ -913,7 +1007,11 @@ private struct ChatPane: View {
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(10)
-                .background(Color.black.opacity(0.08))
+                .background(Theme.accentCool.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Theme.accentCool.opacity(0.12), lineWidth: 1)
+                )
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .frame(maxWidth: 520, alignment: .leading)
         }
@@ -948,12 +1046,20 @@ private struct ChatPane: View {
             .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
         }
 
-        private var bubbleColor: Color {
+        private var bubbleBackground: LinearGradient {
             switch msg.direction {
             case .incoming:
-                return Color.secondary.opacity(0.12)
+                return LinearGradient(
+                    colors: [Theme.incomingBubble, Theme.accentWarm.opacity(0.06)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             case .outgoing:
-                return Color.accentColor.opacity(0.18)
+                return LinearGradient(
+                    colors: [Theme.accent.opacity(0.22), Theme.accentCool.opacity(0.18)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             }
         }
 
@@ -991,7 +1097,7 @@ private struct ChatPane: View {
                     MarkdownMessage(content: caption)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(bubbleColor)
+                        .background(bubbleBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
 
@@ -1015,7 +1121,7 @@ private struct ChatPane: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .background(bubbleColor)
+                    .background(bubbleBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
@@ -1057,12 +1163,20 @@ private struct ChatPane: View {
             return u.scheme == "http" || u.scheme == "https" || u.scheme == "file"
         }
 
-        private var bubbleColor: Color {
+        private var bubbleBackground: LinearGradient {
             switch direction {
             case .incoming:
-                return Color.secondary.opacity(0.12)
+                return LinearGradient(
+                    colors: [Theme.incomingBubble, Theme.accentWarm.opacity(0.06)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             case .outgoing:
-                return Color.accentColor.opacity(0.18)
+                return LinearGradient(
+                    colors: [Theme.accent.opacity(0.22), Theme.accentCool.opacity(0.18)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             }
         }
 
