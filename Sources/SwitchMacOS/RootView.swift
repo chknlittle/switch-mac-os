@@ -15,8 +15,7 @@ struct RootView: View {
                 DirectoryShellView(
                     directory: directory,
                     xmpp: model.xmpp,
-                    chatStore: model.xmpp.chatStore,
-                    pinnedChats: model.config?.pinnedChats ?? []
+                    chatStore: model.xmpp.chatStore
                 )
             } else {
                 NoDirectoryView(statusText: model.xmpp.statusText)
@@ -29,13 +28,12 @@ private struct DirectoryShellView: View {
     @ObservedObject var directory: SwitchDirectoryService
     @ObservedObject var xmpp: XMPPService
     @ObservedObject var chatStore: ChatStore
-    let pinnedChats: [PinnedChat]
     @StateObject private var drafts = ComposerDraftStore()
     @State private var pendingImage: PendingImageAttachment? = nil
 
     var body: some View {
         HSplitView {
-            SidebarList(directory: directory, xmpp: xmpp, chatStore: chatStore, pinnedChats: pinnedChats)
+            SidebarList(directory: directory, xmpp: xmpp, chatStore: chatStore)
                 .frame(minWidth: 240)
 
             ChatPane(
@@ -95,8 +93,8 @@ private struct DirectoryShellView: View {
         guard let target = directory.chatTarget else { return "Chat" }
         switch target {
         case .dispatcher(let jid):
-            if let pinned = pinnedChats.first(where: { $0.jid == jid }) {
-                return "Assistant: \(pinned.title)"
+            if let item = directory.dispatchers.first(where: { $0.jid == jid }) {
+                return "Dispatcher: \(item.name)"
             }
             return "Dispatcher: \(jid)"
         case .individual(let jid):
@@ -134,7 +132,6 @@ private struct SidebarList: View {
     @ObservedObject var directory: SwitchDirectoryService
     @ObservedObject var xmpp: XMPPService
     @ObservedObject var chatStore: ChatStore
-    let pinnedChats: [PinnedChat]
 
     private enum ScrollAnchor {
         static let bottom = "__bottom__"
@@ -159,11 +156,6 @@ private struct SidebarList: View {
     @State private var stickToBottom: Bool = true
     @State private var didInitialScroll: Bool = false
 
-    private var selectedAssistantName: String? {
-        guard let jid = directory.chatTarget?.jid else { return nil }
-        return pinnedChats.first(where: { $0.jid == jid })?.title
-    }
-
     private var selectedDispatcherName: String? {
         guard let dispatcherJid = directory.selectedDispatcherJid else { return nil }
         return directory.dispatchers.first(where: { $0.jid == dispatcherJid })?.name ?? dispatcherJid
@@ -171,64 +163,71 @@ private struct SidebarList: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            SidebarSectionHeader(title: "Sessions", count: directory.individuals.count)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        SidebarSectionHeader(title: "Sessions", count: directory.individuals.count)
-                            .padding(.horizontal, 10)
-                            .padding(.top, 8)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Spacer(minLength: 0)
 
-                        if directory.individuals.isEmpty {
-                            if directory.isLoadingIndividuals && !directory.individualsLoadedOnce {
-                                SidebarPlaceholderRow(
-                                    title: "Loading sessions...",
-                                    subtitle: "If this takes long, use Refresh",
-                                    isLoading: true
-                                )
-                                .padding(.horizontal, 10)
-                            } else {
-                                SidebarPlaceholderRow(
-                                    title: "No sessions",
-                                    subtitle: "This dispatcher has no active sessions",
-                                    isLoading: false
-                                )
-                                .padding(.horizontal, 10)
-                            }
-                        } else {
-                            // directory.individuals is sorted by recency (most recent first);
-                            // show the oldest at the top so the most recent sits at the bottom.
-                            ForEach(Array(directory.individuals.reversed())) { item in
-                                SidebarRow(
-                                    title: item.name,
-                                    subtitle: nil,
-                                    showAvatar: false,
-                                    avatarData: nil,
-                                    isSelected: directory.selectedSessionJid == item.jid,
-                                    isComposing: xmpp.composingJids.contains(item.jid),
-                                    unreadCount: chatStore.unreadCount(for: item.jid),
-                                    onCancel: {
-                                        xmpp.sendMessage(to: item.jid, body: "/cancel")
-                                    }
-                                ) {
-                                    directory.selectIndividual(item)
-                                }
-                                .id(item.jid)
-                                .padding(.horizontal, 10)
-                            }
-                        }
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id(ScrollAnchor.bottom)
-                            .background(
-                                GeometryReader { g in
-                                    Color.clear.preference(
-                                        key: BottomMarkerMinYKey.self,
-                                        value: g.frame(in: .named("sessionsScroll")).minY
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            if directory.individuals.isEmpty {
+                                if directory.isLoadingIndividuals && !directory.individualsLoadedOnce {
+                                    SidebarPlaceholderRow(
+                                        title: "Loading sessions...",
+                                        subtitle: "If this takes long, use Refresh",
+                                        isLoading: true
                                     )
+                                    .padding(.horizontal, 10)
+                                } else {
+                                    SidebarPlaceholderRow(
+                                        title: "No sessions",
+                                        subtitle: "This dispatcher has no active sessions",
+                                        isLoading: false
+                                    )
+                                    .padding(.horizontal, 10)
                                 }
-                            )
+                            } else {
+                                // directory.individuals is sorted by recency (most recent first);
+                                // show the oldest at the top so the most recent sits at the bottom.
+                                ForEach(Array(directory.individuals.reversed())) { item in
+                                    SidebarRow(
+                                        title: item.name,
+                                        subtitle: nil,
+                                        showAvatar: false,
+                                        avatarData: nil,
+                                        isSelected: directory.selectedSessionJid == item.jid,
+                                        isComposing: xmpp.composingJids.contains(item.jid),
+                                        unreadCount: chatStore.unreadCount(for: item.jid),
+                                        onCancel: {
+                                            xmpp.sendMessage(to: item.jid, body: "/cancel")
+                                        }
+                                    ) {
+                                        directory.selectIndividual(item)
+                                    }
+                                    .id(item.jid)
+                                    .padding(.horizontal, 10)
+                                }
+                            }
+
+                            Color.clear
+                                .frame(height: 1)
+                                .id(ScrollAnchor.bottom)
+                                .background(
+                                    GeometryReader { g in
+                                        Color.clear.preference(
+                                            key: BottomMarkerMinYKey.self,
+                                            value: g.frame(in: .named("sessionsScroll")).minY
+                                        )
+                                    }
+                                )
+                        }
                     }
+                    // When the list is too short to fill the viewport, keep it anchored
+                    // to the bottom and put the empty space at the top.
+                    .frame(minHeight: scrollViewHeight, alignment: .bottom)
                     .padding(.bottom, 10)
                 }
                 .coordinateSpace(name: "sessionsScroll")
@@ -333,70 +332,6 @@ private struct SidebarList: View {
                                     .help(item.name)
                                     .onAppear {
                                         xmpp.ensureAvatarLoaded(for: item.jid)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 6)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    SidebarSectionHeader(title: "Assistants", count: pinnedChats.count, detail: selectedAssistantName)
-                        .padding(.horizontal, 10)
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            if pinnedChats.isEmpty {
-                                Text("No pinned assistants")
-                                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.vertical, 6)
-                            } else {
-                                ForEach(pinnedChats) { chat in
-                                    let isSelected = directory.chatTarget?.jid == chat.jid
-                                    let isComposing = xmpp.composingJids.contains(chat.jid)
-                                    let unreadCount = chatStore.unreadCount(for: chat.jid)
-
-                                    Button {
-                                        directory.openPinnedChat(jid: chat.jid)
-                                    } label: {
-                                        ZStack(alignment: .topTrailing) {
-                                            ZStack(alignment: .bottomTrailing) {
-                                                AvatarCircle(imageData: xmpp.avatarDataByJid[chat.jid], fallbackText: chat.title)
-                                                    .scaleEffect(1.2)
-                                                    .frame(width: 30, height: 30)
-                                                    .overlay(
-                                                        Circle()
-                                                            .stroke(isSelected ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 2)
-                                                    )
-
-                                                if isComposing {
-                                                    ProgressView()
-                                                        .scaleEffect(0.35)
-                                                        .frame(width: 10, height: 10)
-                                                        .padding(1)
-                                                        .background(Color(NSColor.controlBackgroundColor))
-                                                        .clipShape(Circle())
-                                                        .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 1))
-                                                        .offset(x: 6, y: 6)
-                                                }
-                                            }
-
-                                            if unreadCount > 0 {
-                                                UnreadBadge(count: unreadCount)
-                                                    .scaleEffect(0.75)
-                                                    .offset(x: 10, y: -10)
-                                            }
-                                        }
-                                        .frame(width: 30, height: 30)
-                                        .contentShape(Circle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help(chat.title)
-                                    .onAppear {
-                                        xmpp.ensureAvatarLoaded(for: chat.jid)
                                     }
                                 }
                             }

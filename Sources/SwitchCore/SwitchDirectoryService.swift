@@ -117,14 +117,6 @@ public final class SwitchDirectoryService: ObservableObject {
         xmpp.ensureHistoryLoaded(with: item.jid)
     }
 
-    public func openPinnedChat(jid: String) {
-        selectedSessionJid = nil
-        chatTarget = .dispatcher(jid)
-        lastSelectedIndividualJid = nil
-        awaitingNewSession = false
-        xmpp.ensureHistoryLoaded(with: jid)
-    }
-
     public func sendChat(body: String) {
         guard let target = chatTarget else { return }
         let jid = target.jid
@@ -273,6 +265,7 @@ public final class SwitchDirectoryService: ObservableObject {
                     self.individuals = merged
                     self.dispatcherToSessions[dispatcherJid] = Set(merged.map { $0.jid })
                     self.suppressResortUntil = Date().addingTimeInterval(1.5)
+                    self.probeRecencyForAllSessions()
                     self.loadHistoryForAllSessions()
                     self.autoSelectNewSessionIfNeeded()
                     self.isLoadingIndividuals = false
@@ -292,6 +285,7 @@ public final class SwitchDirectoryService: ObservableObject {
             self.individuals = self.sortByRecency(items)
             self.dispatcherToSessions[dispatcherJid] = Set(items.map { $0.jid })
             self.suppressResortUntil = Date().addingTimeInterval(1.5)
+            self.probeRecencyForAllSessions()
             self.loadHistoryForAllSessions()
             self.autoSelectNewSessionIfNeeded()
             self.isLoadingIndividuals = false
@@ -349,6 +343,14 @@ public final class SwitchDirectoryService: ObservableObject {
                 self?.scheduleResort()
             }
             .store(in: &cancellables)
+
+        // Re-sort when we learn timestamps without storing message bodies.
+        xmpp.chatStore.$lastActivityByThread
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.scheduleResort()
+            }
+            .store(in: &cancellables)
     }
 
     private func scheduleResort() {
@@ -390,11 +392,26 @@ public final class SwitchDirectoryService: ObservableObject {
         }
     }
 
+    private func probeRecencyForAllSessions() {
+        // Populate `chatStore.lastActivityByThread` for every session so the list can be
+        // sorted by time without fetching full history for each session.
+        //
+        // Override via env: SWITCH_RECENCY_PROBE_THREADS (0 disables; 1..5000).
+        let raw = ProcessInfo.processInfo.environment["SWITCH_RECENCY_PROBE_THREADS"] ?? "5000"
+        let parsed = Int(raw) ?? 5000
+        let limit = max(0, min(parsed, 5000))
+        guard limit > 0 else { return }
+
+        for item in individuals.prefix(limit) {
+            xmpp.ensureRecencyProbed(with: item.jid)
+        }
+    }
+
     private func sortByRecency(_ items: [DirectoryItem]) -> [DirectoryItem] {
         let chatStore = xmpp.chatStore
         return items.sorted { a, b in
-            let aTime = chatStore.messages(for: a.jid).last?.timestamp ?? .distantPast
-            let bTime = chatStore.messages(for: b.jid).last?.timestamp ?? .distantPast
+            let aTime = chatStore.lastActivityByThread[a.jid] ?? chatStore.messages(for: a.jid).last?.timestamp ?? .distantPast
+            let bTime = chatStore.lastActivityByThread[b.jid] ?? chatStore.messages(for: b.jid).last?.timestamp ?? .distantPast
             if aTime != bTime {
                 return aTime > bTime
             }
@@ -424,21 +441,16 @@ public final class SwitchDirectoryService: ObservableObject {
 
     private func lastActivityForDispatcher(_ dispatcherJid: String, chatStore: ChatStore) -> Date {
         // Check messages to/from the dispatcher JID directly
-        let dispatcherTime = chatStore.messages(for: dispatcherJid).last?.timestamp ?? .distantPast
+        let dispatcherTime = chatStore.lastActivityByThread[dispatcherJid] ?? chatStore.messages(for: dispatcherJid).last?.timestamp ?? .distantPast
 
-        // Also check all sessions - if a session's JID contains the dispatcher's local part,
-        // it likely belongs to that dispatcher (e.g., session@host belongs to dispatcher@host)
-        // For now, check all threads and find ones that might belong to this dispatcher
+        // Also check all sessions currently shown under the selected dispatcher.
         var latestTime = dispatcherTime
 
-        for (threadJid, messages) in chatStore.threads {
-            // Simple heuristic: if the session is currently shown under this dispatcher
-            if threadJid != dispatcherJid,
-               selectedDispatcherJid == dispatcherJid,
-               individuals.contains(where: { $0.jid == threadJid }),
-               let lastMsg = messages.last {
-                if lastMsg.timestamp > latestTime {
-                    latestTime = lastMsg.timestamp
+        if selectedDispatcherJid == dispatcherJid {
+            for item in individuals {
+                let t = chatStore.lastActivityByThread[item.jid] ?? chatStore.messages(for: item.jid).last?.timestamp ?? .distantPast
+                if t > latestTime {
+                    latestTime = t
                 }
             }
         }

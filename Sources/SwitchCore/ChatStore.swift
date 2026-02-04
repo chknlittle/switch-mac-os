@@ -125,6 +125,12 @@ public struct ChatMessage: Identifiable, Hashable, Sendable {
 public final class ChatStore: ObservableObject {
     @Published public private(set) var threads: [String: [ChatMessage]] = [:]
 
+    /// Best-effort last-activity timestamps per thread.
+    ///
+    /// This is intentionally independent of `threads` so we can track recency even when we
+    /// don't want to store full message bodies (e.g. MAM recency probes).
+    @Published public private(set) var lastActivityByThread: [String: Date] = [:]
+
     @Published public private(set) var unreadByThread: [String: Int] = [:]
     @Published public private(set) var activeThreadJid: String? = nil
 
@@ -132,6 +138,17 @@ public final class ChatStore: ObservableObject {
     public let liveOutgoingMessage = PassthroughSubject<ChatMessage, Never>()
 
     public init() {}
+
+    public func noteActivity(threadJid: String, timestamp: Date) {
+        let existing = lastActivityByThread[threadJid]
+        if let existing {
+            if timestamp > existing {
+                lastActivityByThread[threadJid] = timestamp
+            }
+        } else {
+            lastActivityByThread[threadJid] = timestamp
+        }
+    }
 
     public func setActiveThread(_ threadJid: String?) {
         activeThreadJid = threadJid
@@ -198,6 +215,7 @@ public final class ChatStore: ObservableObject {
         arr.append(message)
         arr.sort { $0.timestamp < $1.timestamp }
         threads[message.threadJid] = arr
+        noteActivity(threadJid: message.threadJid, timestamp: message.timestamp)
         return true
     }
 }

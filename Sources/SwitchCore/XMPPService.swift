@@ -217,6 +217,11 @@ public final class XMPPService: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
 
     private var mamQueryToThread: [String: String] = [:]
+    private enum MamQueryMode: String, Sendable {
+        case history
+        case recencyProbe
+    }
+    private var mamQueryMode: [String: MamQueryMode] = [:]
     private var mamRouteCleanup: [String: DispatchWorkItem] = [:]
     private let mamRouteGraceSeconds: TimeInterval = 30
 
@@ -226,12 +231,19 @@ public final class XMPPService: ObservableObject {
     private var historyQueue: [String] = []
     private var isProcessingHistoryQueue: Bool = false
 
+    private var recencyProbedThreads: Set<String> = []
+    private var recencyLoadingThreads: Set<String> = []
+    private var recencyQueuedThreads: Set<String> = []
+    private var recencyQueue: [String] = []
+    private var isProcessingRecencyQueue: Bool = false
+
     /// True while we're draining the initial MAM history queue.
     @Published public private(set) var isHistoryWarmup: Bool = false
 
     // MAM history pulls can be expensive on first launch; keep the default small.
     // Override via env: SWITCH_MAM_LAST_ITEMS (10..500).
     private let mamLastItems: Int
+    private let mamRecencyLastItems: Int
 
     private var cachedUploadComponents: [HttpFileUploadModule.UploadComponent] = []
 
@@ -251,6 +263,10 @@ public final class XMPPService: ObservableObject {
         let rawMamLast = ProcessInfo.processInfo.environment["SWITCH_MAM_LAST_ITEMS"] ?? "50"
         let parsedMamLast = Int(rawMamLast) ?? 50
         self.mamLastItems = max(10, min(parsedMamLast, 500))
+
+        let rawMamRecencyLast = ProcessInfo.processInfo.environment["SWITCH_MAM_RECENCY_LAST_ITEMS"] ?? "1"
+        let parsedMamRecencyLast = Int(rawMamRecencyLast) ?? 1
+        self.mamRecencyLastItems = max(1, min(parsedMamRecencyLast, 5))
 
         registerDefaultModules()
         bindPublishers()
@@ -459,6 +475,7 @@ public final class XMPPService: ObservableObject {
 
         let queryId = UUID().uuidString
         mamQueryToThread[queryId] = next
+        mamQueryMode[queryId] = .history
         scheduleMamRouteCleanup(queryId: queryId)
 
         let form = MAMQueryForm(version: .MAM2)
@@ -501,6 +518,7 @@ public final class XMPPService: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.mamQueryToThread.removeValue(forKey: queryId)
+                self.mamQueryMode.removeValue(forKey: queryId)
                 self.mamRouteCleanup.removeValue(forKey: queryId)
             }
         }
@@ -516,6 +534,63 @@ public final class XMPPService: ObservableObject {
         client.connectionConfiguration.modifyConnectorOptions(type: SocketConnectorNetwork.Options.self) { options in
             options.connectionDetails = .init(proto: .XMPP, host: config.xmppHost, port: config.xmppPort)
             options.connectionTimeout = 15
+        }
+    }
+
+    /// Ensure we know *something* about thread recency without loading full history.
+    /// This runs a cheap MAM query (`lastItems` ~= 1) and only updates `chatStore.lastActivityByThread`.
+    public func ensureRecencyProbed(with bareJid: String) {
+        let jid = bareJid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !jid.isEmpty else { return }
+        if recencyProbedThreads.contains(jid) || recencyLoadingThreads.contains(jid) || recencyQueuedThreads.contains(jid) {
+            return
+        }
+        recencyQueuedThreads.insert(jid)
+        recencyQueue.append(jid)
+        processRecencyQueueIfNeeded()
+    }
+
+    private func processRecencyQueueIfNeeded() {
+        guard !isProcessingRecencyQueue else { return }
+        isProcessingRecencyQueue = true
+        processNextRecencyProbe()
+    }
+
+    private func processNextRecencyProbe() {
+        guard let next = recencyQueue.first else {
+            isProcessingRecencyQueue = false
+            return
+        }
+        recencyQueue.removeFirst()
+        recencyQueuedThreads.remove(next)
+        recencyLoadingThreads.insert(next)
+
+        let queryId = UUID().uuidString
+        mamQueryToThread[queryId] = next
+        mamQueryMode[queryId] = .recencyProbe
+        scheduleMamRouteCleanup(queryId: queryId)
+
+        let form = MAMQueryForm(version: .MAM2)
+        form.with = JID(next)
+
+        mamModule.queryItems(
+            version: .MAM2,
+            query: form,
+            queryId: queryId,
+            rsm: RSM.Query(lastItems: mamRecencyLastItems)
+        ) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.recencyLoadingThreads.remove(next)
+                switch result {
+                case .success:
+                    self.recencyProbedThreads.insert(next)
+                case .failure(let err):
+                    logger.error("MAM recency probe failed for \(next, privacy: .public): \(String(describing: err), privacy: .public)")
+                }
+                self.scheduleMamRouteCleanup(queryId: queryId)
+                self.processNextRecencyProbe()
+            }
         }
     }
 
@@ -628,10 +703,20 @@ public final class XMPPService: ObservableObject {
             .sink { [weak self] archived in
                 guard let self else { return }
                 guard let threadJid = self.mamQueryToThread[archived.query.id] else { return }
-                guard let body = archived.message.body, !body.isEmpty else { return }
+                let mode = self.mamQueryMode[archived.query.id] ?? .history
 
                 // Extend routing window while results are streaming in.
                 self.scheduleMamRouteCleanup(queryId: archived.query.id)
+
+                // Always record activity for sorting, even if the message has no body.
+                self.chatStore.noteActivity(threadJid: threadJid, timestamp: archived.timestamp)
+
+                // For recency probes we only need the timestamp, not the message body.
+                if mode == .recencyProbe {
+                    return
+                }
+
+                guard let body = archived.message.body, !body.isEmpty else { return }
 
                 let localBare = self.client.userBareJid
                 let fromBare = archived.message.from?.bareJid
