@@ -156,10 +156,6 @@ private struct SidebarList: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SidebarSectionHeader(title: "Sessions", count: directory.individuals.count, isLoading: directory.isLoadingIndividuals)
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-
             GeometryReader { g in
                 ScrollViewReader { proxy in
                     ScrollView(.vertical) {
@@ -254,6 +250,23 @@ private struct SidebarList: View {
                     }
                 }
             }
+
+            HStack(spacing: 8) {
+                Text("Sessions")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if directory.isLoadingIndividuals {
+                    ProgressView()
+                        .scaleEffect(0.55)
+                }
+                Text("\(directory.individuals.count)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
 
             Divider()
 
@@ -367,13 +380,11 @@ private struct SidebarSectionHeader: View {
     let title: String
     let count: Int?
     let detail: String?
-    let isLoading: Bool
 
-    init(title: String, count: Int? = nil, detail: String? = nil, isLoading: Bool = false) {
+    init(title: String, count: Int? = nil, detail: String? = nil) {
         self.title = title
         self.count = count
         self.detail = detail
-        self.isLoading = isLoading
     }
 
     var body: some View {
@@ -393,10 +404,6 @@ private struct SidebarSectionHeader: View {
                     .clipShape(Capsule(style: .continuous))
             }
             Spacer()
-            if isLoading {
-                ProgressView()
-                    .scaleEffect(0.55)
-            }
             if let count {
                 Text("\(count)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
