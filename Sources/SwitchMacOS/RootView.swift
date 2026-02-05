@@ -749,6 +749,8 @@ private struct ChatPane: View {
             } else {
                 if isTranscriptMode {
                     TranscriptTextView(text: transcriptText(messages))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .layoutPriority(1)
                         .background(
                             TintedSurface(
                                 base: Color(NSColor.textBackgroundColor),
@@ -1554,9 +1556,13 @@ private struct TranscriptTextView: NSViewRepresentable {
         textView.font = NSFont.systemFont(ofSize: 13)
         textView.textColor = NSColor.labelColor
         textView.textContainerInset = NSSize(width: 10, height: 8)
-        textView.textContainer?.widthTracksTextView = true
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        if let container = textView.textContainer {
+            container.widthTracksTextView = true
+            container.heightTracksTextView = false
+        }
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
 
         let scroll = NSScrollView()
