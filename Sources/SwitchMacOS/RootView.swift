@@ -38,6 +38,7 @@ private struct DirectoryShellView: View {
 
             ChatPane(
                 title: chatTitle,
+                headerPrompt: sessionHeaderPrompt,
                 threadJid: directory.chatTarget?.jid,
                 messages: messagesForActiveChat(),
                 xmpp: xmpp,
@@ -102,6 +103,18 @@ private struct DirectoryShellView: View {
         case .subagent(let jid):
             return "Subagent: \(jid)"
         }
+    }
+
+    private var sessionHeaderPrompt: String? {
+        guard let target = directory.chatTarget else { return nil }
+        guard case .individual(let jid) = target else { return nil }
+        guard let item = directory.individuals.first(where: { $0.jid == jid }) else { return nil }
+        // Directory item names are often the prompt/label used to start the session.
+        // If the server didn't provide one, DirectoryItem falls back to the JID.
+        let trimmed = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed != jid else { return nil }
+        return trimmed
     }
 
     private func messagesForActiveChat() -> [ChatMessage] {
@@ -700,6 +713,7 @@ private struct PendingImageRow: View {
 
 private struct ChatPane: View {
     let title: String
+    let headerPrompt: String?
     let threadJid: String?
     let messages: [ChatMessage]
     let xmpp: XMPPService
@@ -719,18 +733,31 @@ private struct ChatPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                if isTyping {
-                    ProgressView()
-                        .scaleEffect(0.5)
-                        .frame(width: 14, height: 14)
-                    Text("typing...")
-                        .font(.system(size: 11, weight: .regular, design: .default))
-                        .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let headerPrompt, !headerPrompt.isEmpty {
+                        Text(headerPrompt)
+                            .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+
+                    HStack(spacing: 8) {
+                        Text(title)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        if isTyping {
+                            ProgressView()
+                                .scaleEffect(0.5)
+                                .frame(width: 14, height: 14)
+                            Text("typing...")
+                                .font(.system(size: 11, weight: .regular, design: .default))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                Spacer()
+
+                Spacer(minLength: 0)
 
                 Button(isTranscriptMode ? "Done" : "Select") {
                     isTranscriptMode.toggle()
