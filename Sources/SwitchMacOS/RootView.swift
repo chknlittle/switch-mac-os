@@ -76,15 +76,16 @@ private struct DirectoryShellView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             drafts.flush()
         }
+        .navigationTitle("")
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                HStack(spacing: 10) {
+            ToolbarItem(placement: .automatic) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(statusDotColor)
+                        .frame(width: 8, height: 8)
                     Text(xmpp.statusText)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
-                    Button("Refresh") {
-                        directory.refreshAll()
-                    }
                 }
             }
         }
@@ -120,6 +121,14 @@ private struct DirectoryShellView: View {
     private func messagesForActiveChat() -> [ChatMessage] {
         guard let target = directory.chatTarget else { return [] }
         return chatStore.messages(for: target.jid)
+    }
+
+    private var statusDotColor: Color {
+        switch xmpp.status {
+        case .connected: return .green
+        case .connecting: return .orange
+        case .disconnected, .error: return .red
+        }
     }
 
     private var isChatTargetTyping: Bool {
