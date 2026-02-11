@@ -27,5 +27,8 @@ struct SwitchMacOSApp: App {
                 }
         }
         .windowStyle(.automatic)
+        .commands {
+            DispatcherHotkeysCommands(model: model)
+        }
     }
 }

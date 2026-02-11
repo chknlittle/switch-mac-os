@@ -134,6 +134,19 @@ SWITCH_PINNED_CHATS="notes=notes@your.xmpp.server.com,alerts=alerts@your.xmpp.se
   .build/debug/SwitchMacOS
 ```
 
+### Dispatcher Hotkeys (Cmd+1..Cmd+4)
+
+You can bind up to 4 dispatchers to `Cmd+1`, `Cmd+2`, `Cmd+3`, `Cmd+4` via env vars:
+
+```bash
+SWITCH_DISPATCHER_HOTKEY_1=acorn@
+SWITCH_DISPATCHER_HOTKEY_2=oc-codex@
+SWITCH_DISPATCHER_HOTKEY_3=anthropic@
+SWITCH_DISPATCHER_HOTKEY_4=oc-gpt@
+```
+
+These shortcuts work while the app is focused (standard macOS menu key equivalents).
+
 ### Running Tests
 
 ```bash
