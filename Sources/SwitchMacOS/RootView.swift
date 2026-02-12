@@ -1043,7 +1043,7 @@ private struct ChatPane: View {
                     if isToolMessage {
                         toolMessageContent
                     } else {
-                        MarkdownMessage(content: msg.body)
+                        MarkdownMessage(content: msg.body, xhtmlBody: msg.xhtmlBody)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
                             .background(bubbleColor)
@@ -1183,7 +1183,7 @@ private struct ChatPane: View {
 
             VStack(alignment: direction == .incoming ? .leading : .trailing, spacing: 8) {
                 if let caption, !caption.isEmpty {
-                    MarkdownMessage(content: caption)
+                    MarkdownMessage(content: caption, xhtmlBody: nil)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                         .background(bubbleColor)
@@ -1841,8 +1841,15 @@ private struct ComposerTextView: NSViewRepresentable {
 
 private struct MarkdownMessage: View {
     let content: String
+    let xhtmlBody: String?
 
     var body: some View {
+        if let xhtmlBody, let rich = htmlText(xhtmlBody) {
+            return messageText(rich)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+
         let normalized = normalize(content)
 
         // Render as a single Text view so selection can span paragraphs and code blocks.
@@ -1864,6 +1871,23 @@ private struct MarkdownMessage: View {
         return messageText(combined)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
+    }
+
+    private func htmlText(_ html: String) -> Text? {
+        guard let data = html.data(using: .utf8) else {
+            return nil
+        }
+        let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
+            .documentType: NSAttributedString.DocumentType.html,
+            .characterEncoding: String.Encoding.utf8.rawValue
+        ]
+        guard let ns = try? NSAttributedString(data: data, options: options, documentAttributes: nil) else {
+            return nil
+        }
+        if let attr = try? AttributedString(ns, including: \.appKit) {
+            return Text(attr)
+        }
+        return Text(ns.string)
     }
 
     private func markdownText(_ s: String) -> Text {

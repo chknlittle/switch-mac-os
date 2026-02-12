@@ -108,14 +108,16 @@ public struct ChatMessage: Identifiable, Hashable, Sendable {
     public let threadJid: String
     public let direction: Direction
     public let body: String
+    public let xhtmlBody: String?
     public let timestamp: Date
     public let meta: MessageMeta?
 
-    public init(id: String, threadJid: String, direction: Direction, body: String, timestamp: Date, meta: MessageMeta? = nil) {
+    public init(id: String, threadJid: String, direction: Direction, body: String, xhtmlBody: String? = nil, timestamp: Date, meta: MessageMeta? = nil) {
         self.id = id
         self.threadJid = threadJid
         self.direction = direction
         self.body = body
+        self.xhtmlBody = xhtmlBody
         self.timestamp = timestamp
         self.meta = meta
     }
@@ -171,12 +173,13 @@ public final class ChatStore: ObservableObject {
         threads[threadJid] ?? []
     }
 
-    public func appendIncoming(threadJid: String, body: String, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
+    public func appendIncoming(threadJid: String, body: String, xhtmlBody: String? = nil, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
         let msg = ChatMessage(
             id: id ?? UUID().uuidString,
             threadJid: threadJid,
             direction: .incoming,
             body: body,
+            xhtmlBody: xhtmlBody,
             timestamp: timestamp,
             meta: meta
         )
@@ -189,12 +192,13 @@ public final class ChatStore: ObservableObject {
         }
     }
 
-    public func appendOutgoing(threadJid: String, body: String, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
+    public func appendOutgoing(threadJid: String, body: String, xhtmlBody: String? = nil, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
         let msg = ChatMessage(
             id: id ?? UUID().uuidString,
             threadJid: threadJid,
             direction: .outgoing,
             body: body,
+            xhtmlBody: xhtmlBody,
             timestamp: timestamp,
             meta: meta
         )

@@ -9,6 +9,8 @@ private let logger = Logger(subsystem: "com.switch.macos", category: "XMPPServic
 public let switchMetaNamespace = "urn:switch:message-meta"
 
 private let oobNamespace = "jabber:x:oob"
+private let xhtmlImNamespace = "http://jabber.org/protocol/xhtml-im"
+private let xhtmlNamespace = "http://www.w3.org/1999/xhtml"
 
 private func localName(of raw: String) -> String {
     // Handles:
@@ -176,6 +178,86 @@ public func parseMessageMeta(from element: Element) -> MessageMeta? {
     }
 
     return MessageMeta(type: metaType, tool: tool, runStats: runStats, requestId: requestId, question: question, attachments: attachments)
+}
+
+public func parseXHTMLBody(from element: Element) -> String? {
+    let htmlElement = element.children.first {
+        ($0.xmlns == xhtmlImNamespace && localName(of: $0.name) == "html") ||
+        localName(of: $0.name) == "html"
+    }
+    guard let htmlElement else {
+        return nil
+    }
+
+    let bodyElement = htmlElement.children.first {
+        ($0.xmlns == xhtmlNamespace && localName(of: $0.name) == "body") ||
+        localName(of: $0.name) == "body"
+    }
+    guard let bodyElement else {
+        return nil
+    }
+
+    let rendered = renderXHTMLElementChildren(bodyElement).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !rendered.isEmpty else {
+        return nil
+    }
+
+    return """
+    <html>
+      <head>
+        <meta charset=\"utf-8\">
+        <style>
+          body { font-family: -apple-system, Helvetica, Arial, sans-serif; font-size: 13.5px; line-height: 1.45; margin: 0; }
+          p { margin: 0 0 0.6em 0; }
+          pre { margin: 0.35em 0; padding: 8px 10px; background: rgba(0,0,0,0.06); border-radius: 6px; font-family: SFMono-Regular, Menlo, monospace; font-size: 12.5px; white-space: pre-wrap; }
+          code { font-family: SFMono-Regular, Menlo, monospace; }
+          table { border-collapse: collapse; margin: 0.4em 0; width: 100%; }
+          th, td { border: 1px solid rgba(0,0,0,0.25); text-align: left; padding: 5px 7px; vertical-align: top; }
+          thead th { background: rgba(0,0,0,0.08); }
+          ul, ol { margin: 0.3em 0 0.5em 1.1em; }
+          li { margin: 0.1em 0; }
+        </style>
+      </head>
+      <body>
+        \(rendered)
+      </body>
+    </html>
+    """
+}
+
+private func renderXHTMLElementChildren(_ parent: Element) -> String {
+    var out = ""
+    if let txt = parent.value, !txt.isEmpty {
+        out += escapeHTML(txt)
+    }
+    for child in parent.children {
+        out += renderXHTMLElement(child)
+    }
+    return out
+}
+
+private func renderXHTMLElement(_ element: Element) -> String {
+    let rawName = localName(of: element.name).lowercased()
+    let allowedTags: Set<String> = [
+        "p", "br", "strong", "em", "b", "i", "u", "code", "pre",
+        "table", "thead", "tbody", "tr", "th", "td",
+        "ul", "ol", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "span", "div"
+    ]
+    let tag = allowedTags.contains(rawName) ? rawName : "span"
+
+    if tag == "br" {
+        return "<br/>"
+    }
+
+    let inner = renderXHTMLElementChildren(element)
+    return "<\(tag)>\(inner)</\(tag)>"
+}
+
+private func escapeHTML(_ s: String) -> String {
+    s
+        .replacingOccurrences(of: "&", with: "&amp;")
+        .replacingOccurrences(of: "<", with: "&lt;")
+        .replacingOccurrences(of: ">", with: "&gt;")
 }
 
 class DebugStreamLogger: StreamLogger {
@@ -694,7 +776,8 @@ public final class XMPPService: ObservableObject {
                 // Receiving a message with body means they're done typing
                 self.composingJids.remove(from)
                 let meta = parseMessageMeta(from: received.message.element)
-                self.chatStore.appendIncoming(threadJid: from, body: body, id: received.message.id, timestamp: received.message.delay?.stamp ?? Date(), meta: meta)
+                let xhtmlBody = parseXHTMLBody(from: received.message.element)
+                self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, id: received.message.id, timestamp: received.message.delay?.stamp ?? Date(), meta: meta)
             }
             .store(in: &cancellables)
 
@@ -723,12 +806,13 @@ public final class XMPPService: ObservableObject {
                 let direction: ChatMessage.Direction = (fromBare == localBare) ? .outgoing : .incoming
                 let id = "mam:\(archived.messageId)"
                 let meta = parseMessageMeta(from: archived.message.element)
+                let xhtmlBody = parseXHTMLBody(from: archived.message.element)
 
                 switch direction {
                 case .incoming:
-                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
+                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
                 case .outgoing:
-                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
+                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
                 }
             }
             .store(in: &cancellables)
