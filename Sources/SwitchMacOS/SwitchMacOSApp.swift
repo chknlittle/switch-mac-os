@@ -8,6 +8,8 @@ struct SwitchMacOSApp: App {
     @StateObject private var notificationService = NotificationService()
     @StateObject private var soundService = SoundService()
 
+    @MainActor static var _hotkeyMonitor: DispatcherHotkeyMonitor?
+
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
     }
@@ -24,6 +26,10 @@ struct SwitchMacOSApp: App {
                         chatStore: model.xmpp.chatStore,
                         directoryService: model.directory
                     )
+                    let hotkeyMonitor = DispatcherHotkeyMonitor(model: model)
+                    hotkeyMonitor.install()
+                    // Retain for app lifetime — never uninstalled.
+                    Self._hotkeyMonitor = hotkeyMonitor
                 }
         }
         .windowStyle(.automatic)
