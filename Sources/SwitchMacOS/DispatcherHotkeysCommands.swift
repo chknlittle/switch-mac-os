@@ -81,7 +81,7 @@ private struct DispatcherHotkeyBindings {
     let four: String?
 
     static func loadFromEnvironment() -> DispatcherHotkeyBindings {
-        let env = ProcessInfo.processInfo.environment
+        let env = EnvLoader.loadMergedEnv()
         func get(_ k: String) -> String? {
             let v = env[k]?.trimmingCharacters(in: .whitespacesAndNewlines)
             return (v?.isEmpty == false) ? v : nil
