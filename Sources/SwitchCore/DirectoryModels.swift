@@ -36,6 +36,9 @@ public extension ChatTarget {
 
 public struct SwitchDirectoryNodes: Sendable {
     public var dispatchers: String = "dispatchers"
+    /// Direct dispatcher→sessions node (skips groups indirection).
+    public var sessions: @Sendable (String) -> String = { dispatcherJid in "sessions:\(dispatcherJid)" }
+    // Legacy nodes (kept for reference but no longer queried by default).
     public var groups: @Sendable (String) -> String = { dispatcherJid in "groups:\(dispatcherJid)" }
     public var individuals: @Sendable (String) -> String = { groupJid in "individuals:\(groupJid)" }
     public var subagents: @Sendable (String) -> String = { individualJid in "subagents:\(individualJid)" }

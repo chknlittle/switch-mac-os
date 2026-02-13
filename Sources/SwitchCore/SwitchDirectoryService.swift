@@ -48,14 +48,17 @@ public final class SwitchDirectoryService: ObservableObject {
     private var pendingSubscriptions: Set<String> = []
     private var lastSelectedIndividualJid: String? = nil
     private var individualsRefreshToken: UUID? = nil
-    private var groupsRefreshToken: UUID? = nil
     private var awaitingNewSession = false
     private var knownIndividualJids: Set<String> = []
+    private var dispatchersLoaded = false
 
     // Sorting can cause visible list "jitter" while history loads; debounce and
     // briefly suppress resorting during initial loads.
     private var resortWorkItem: DispatchWorkItem? = nil
     private var suppressResortUntil: Date = .distantPast
+
+    // Cache sessions per dispatcher so switching back is instant.
+    private var sessionsByDispatcher: [String: [DirectoryItem]] = [:]
 
     public init(
         xmpp: XMPPService,
@@ -76,7 +79,9 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     public func refreshAll() {
-        refreshDispatchers()
+        if !dispatchersLoaded {
+            refreshDispatchers()
+        }
         if let dispatcher = selectedDispatcherJid {
             refreshSessionsForDispatcher(dispatcherJid: dispatcher)
         } else {
@@ -102,11 +107,26 @@ public final class SwitchDirectoryService: ObservableObject {
         selectedSessionJid = nil
         chatTarget = .dispatcher(item.jid)
         lastSelectedIndividualJid = nil
-        individuals = []
-        isLoadingIndividuals = true
-        individualsLoadedOnce = false
+        awaitingNewSession = false
+
+        // Use cached sessions if we have them; still refresh in the background.
+        if let cached = sessionsByDispatcher[item.jid], !cached.isEmpty {
+            individuals = sortByRecency(cached)
+            dispatcherToSessions[item.jid] = Set(cached.map { $0.jid })
+            isLoadingIndividuals = false
+            individualsLoadedOnce = true
+        } else {
+            individuals = []
+            isLoadingIndividuals = true
+            individualsLoadedOnce = false
+        }
+
         suppressResortUntil = Date().addingTimeInterval(1.5)
         xmpp.ensureHistoryLoaded(with: item.jid)
+
+        // Subscribe to this dispatcher's sessions node and fetch.
+        let sessionsNode = nodes.sessions(item.jid)
+        ensureSubscribed(to: sessionsNode)
         refreshSessionsForDispatcher(dispatcherJid: item.jid)
     }
 
@@ -145,7 +165,6 @@ public final class SwitchDirectoryService: ObservableObject {
 
         switch target {
         case .subagent:
-            // Subagent work messages are a custom wire format; keep attachments disabled for now.
             return
         case .dispatcher, .individual:
             xmpp.sendImageAttachment(to: jid, data: data, filename: filename, mime: mime, caption: caption)
@@ -194,12 +213,15 @@ public final class SwitchDirectoryService: ObservableObject {
         selectIndividual(newItem)
     }
 
+    // MARK: - Dispatchers (fetched once, cached permanently)
+
     private func refreshDispatchers() {
         let node = nodes.dispatchers
         ensureSubscribed(to: node)
         queryItems(node: node) { [weak self] items in
             guard let self else { return }
             self.dispatchers = self.sortDispatchersByRecency(items)
+            self.dispatchersLoaded = true
 
             // If nothing is selected yet, pick the first dispatcher and load sessions.
             if self.selectedDispatcherJid == nil, let first = self.dispatchers.first {
@@ -208,90 +230,44 @@ public final class SwitchDirectoryService: ObservableObject {
         }
     }
 
+    // MARK: - Sessions (direct query, no groups indirection)
+
     private func refreshSessionsForDispatcher(dispatcherJid: String) {
         let token = UUID()
-        groupsRefreshToken = token
+        individualsRefreshToken = token
 
-        // New dispatcher selection clears individuals; show a loading state until
-        // we know whether there are sessions.
         if selectedDispatcherJid == dispatcherJid, individuals.isEmpty {
             isLoadingIndividuals = true
         }
 
-        let node = nodes.groups(dispatcherJid)
-        ensureSubscribed(to: node)
-        queryItems(node: node) { [weak self] items in
-            guard let self else { return }
-
-            guard self.groupsRefreshToken == token else { return }
-            guard self.selectedDispatcherJid == dispatcherJid else { return }
-            self.refreshIndividualsForDispatcher(dispatcherJid: dispatcherJid, groups: items)
-        }
-    }
-
-    private func refreshIndividualsForDispatcher(dispatcherJid: String, groups: [DirectoryItem]) {
-        let token = UUID()
-        individualsRefreshToken = token
-
-        if groups.isEmpty {
-            individuals = []
-            isLoadingIndividuals = false
-            individualsLoadedOnce = true
-            return
-        }
-
-        if groups.count == 1, let only = groups.first {
-            refreshIndividuals(groupJid: only.jid, dispatcherJid: dispatcherJid, token: token)
-            return
-        }
-
-        var remaining = groups.count
-        var aggregate: [String: DirectoryItem] = [:]
-
-        for group in groups {
-            let groupJid = group.jid
-            let node = nodes.individuals(groupJid)
-            ensureSubscribed(to: node)
-            queryItems(node: node) { [weak self] items in
-                guard let self else { return }
-                guard self.individualsRefreshToken == token else { return }
-                guard self.selectedDispatcherJid == dispatcherJid else { return }
-                for it in items {
-                    aggregate[it.jid] = it
-                }
-                remaining -= 1
-                if remaining == 0 {
-                    let merged = self.sortByRecency(Array(aggregate.values))
-                    self.individuals = merged
-                    self.dispatcherToSessions[dispatcherJid] = Set(merged.map { $0.jid })
-                    self.suppressResortUntil = Date().addingTimeInterval(1.5)
-                    self.probeRecencyForAllSessions()
-                    self.loadHistoryForAllSessions()
-                    self.autoSelectNewSessionIfNeeded()
-                    self.isLoadingIndividuals = false
-                    self.individualsLoadedOnce = true
-                }
-            }
-        }
-    }
-
-    private func refreshIndividuals(groupJid: String, dispatcherJid: String, token: UUID) {
-        let node = nodes.individuals(groupJid)
+        let node = nodes.sessions(dispatcherJid)
         ensureSubscribed(to: node)
         queryItems(node: node) { [weak self] items in
             guard let self else { return }
             guard self.individualsRefreshToken == token else { return }
             guard self.selectedDispatcherJid == dispatcherJid else { return }
-            self.individuals = self.sortByRecency(items)
-            self.dispatcherToSessions[dispatcherJid] = Set(items.map { $0.jid })
-            self.suppressResortUntil = Date().addingTimeInterval(1.5)
-            self.probeRecencyForAllSessions()
-            self.loadHistoryForAllSessions()
-            self.autoSelectNewSessionIfNeeded()
-            self.isLoadingIndividuals = false
-            self.individualsLoadedOnce = true
+            self.applySessionsList(items, forDispatcher: dispatcherJid)
         }
     }
+
+    /// Apply a session list (from disco query or fat pubsub notification).
+    private func applySessionsList(_ items: [DirectoryItem], forDispatcher dispatcherJid: String) {
+        let sorted = sortByRecency(items)
+        sessionsByDispatcher[dispatcherJid] = sorted
+        dispatcherToSessions[dispatcherJid] = Set(sorted.map { $0.jid })
+
+        if selectedDispatcherJid == dispatcherJid {
+            individuals = sorted
+            suppressResortUntil = Date().addingTimeInterval(1.5)
+            probeRecencyForAllSessions()
+            loadHistoryForAllSessions()
+            autoSelectNewSessionIfNeeded()
+            isLoadingIndividuals = false
+            individualsLoadedOnce = true
+        }
+    }
+
+    // MARK: - Disco query
 
     private func queryItems(node: String, assign: @escaping @MainActor ([DirectoryItem]) -> Void) {
         let disco = xmpp.disco()
@@ -306,6 +282,8 @@ public final class SwitchDirectoryService: ObservableObject {
             }
         }
     }
+
+    // MARK: - PubSub
 
     private func ensureSubscribed(to node: String) {
         guard !subscribedNodes.contains(node) else { return }
@@ -328,10 +306,38 @@ public final class SwitchDirectoryService: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] notification in
                 guard let self else { return }
-                // Skeleton behavior: on any node update, re-run relevant disco queries.
-                // This keeps the client correct even if the pubsub payload format evolves.
-                if self.subscribedNodes.contains(notification.node) {
-                    self.refreshAll()
+                guard self.subscribedNodes.contains(notification.node) else { return }
+
+                let node = notification.node
+
+                // Try to extract a fat sessions payload from the notification.
+                if node.hasPrefix("sessions:") {
+                    if let items = self.parseSessionsPayload(notification) {
+                        let dispatcherJid = String(node.dropFirst("sessions:".count))
+                        self.applySessionsList(items, forDispatcher: dispatcherJid)
+                        return
+                    }
+                    // Payload missing or unparseable — fall back to disco query.
+                    let dispatcherJid = String(node.dropFirst("sessions:".count))
+                    if self.selectedDispatcherJid == dispatcherJid {
+                        self.refreshSessionsForDispatcher(dispatcherJid: dispatcherJid)
+                    }
+                    return
+                }
+
+                // Legacy individuals: node — refresh sessions for the active dispatcher.
+                if node.hasPrefix("individuals:") {
+                    if let dispatcher = self.selectedDispatcherJid {
+                        self.refreshSessionsForDispatcher(dispatcherJid: dispatcher)
+                    }
+                    return
+                }
+
+                // Dispatchers node changed (rare — config change on server).
+                if node == self.nodes.dispatchers {
+                    self.dispatchersLoaded = false
+                    self.refreshDispatchers()
+                    return
                 }
             }
             .store(in: &cancellables)
@@ -352,6 +358,24 @@ public final class SwitchDirectoryService: ObservableObject {
             }
             .store(in: &cancellables)
     }
+
+    /// Parse a fat pubsub notification: <switch event="sessions"><session jid="..." name="..."/>...</switch>
+    private func parseSessionsPayload(_ notification: PubSubModule.ItemNotification) -> [DirectoryItem]? {
+        guard case .published(let item) = notification.action else { return nil }
+        guard let payload = item.payload else { return nil }
+
+        guard payload.attribute("event") == "sessions" else { return nil }
+
+        var items: [DirectoryItem] = []
+        for child in payload.children where child.name == "session" {
+            guard let jid = child.attribute("jid") else { continue }
+            let name = child.attribute("name")
+            items.append(DirectoryItem(jid: jid, name: name))
+        }
+        return items
+    }
+
+    // MARK: - Sorting
 
     private func scheduleResort() {
         resortWorkItem?.cancel()
@@ -380,8 +404,6 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     private func loadHistoryForAllSessions() {
-        // Prefetch a small number of threads so the UI has recent context without
-        // spamming the server with one MAM query per session.
         let raw = ProcessInfo.processInfo.environment["SWITCH_PREFETCH_HISTORY_THREADS"] ?? "0"
         let parsed = Int(raw) ?? 0
         let limit = max(0, min(parsed, 50))
@@ -393,10 +415,6 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     private func probeRecencyForAllSessions() {
-        // Populate `chatStore.lastActivityByThread` for every session so the list can be
-        // sorted by time without fetching full history for each session.
-        //
-        // Override via env: SWITCH_RECENCY_PROBE_THREADS (0 disables; 1..5000).
         let raw = ProcessInfo.processInfo.environment["SWITCH_RECENCY_PROBE_THREADS"] ?? "5000"
         let parsed = Int(raw) ?? 5000
         let limit = max(0, min(parsed, 5000))
@@ -415,7 +433,6 @@ public final class SwitchDirectoryService: ObservableObject {
             if aTime != bTime {
                 return aTime > bTime
             }
-            // Keep ordering stable until history arrives.
             if a.name != b.name {
                 return a.name.localizedStandardCompare(b.name) == .orderedAscending
             }
@@ -426,7 +443,6 @@ public final class SwitchDirectoryService: ObservableObject {
     private func sortDispatchersByRecency(_ items: [DirectoryItem]) -> [DirectoryItem] {
         let chatStore = xmpp.chatStore
         return items.sorted { a, b in
-            // Get most recent message from dispatcher itself or any of its sessions
             let aTime = lastActivityForDispatcher(a.jid, chatStore: chatStore)
             let bTime = lastActivityForDispatcher(b.jid, chatStore: chatStore)
             if aTime != bTime {
@@ -440,10 +456,8 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     private func lastActivityForDispatcher(_ dispatcherJid: String, chatStore: ChatStore) -> Date {
-        // Check messages to/from the dispatcher JID directly
         let dispatcherTime = chatStore.lastActivityByThread[dispatcherJid] ?? chatStore.messages(for: dispatcherJid).last?.timestamp ?? .distantPast
 
-        // Also check all sessions currently shown under the selected dispatcher.
         var latestTime = dispatcherTime
 
         if selectedDispatcherJid == dispatcherJid {
