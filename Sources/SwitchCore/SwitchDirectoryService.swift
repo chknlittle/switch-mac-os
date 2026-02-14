@@ -60,6 +60,9 @@ public final class SwitchDirectoryService: ObservableObject {
     // Cache sessions per dispatcher so switching back is instant.
     private var sessionsByDispatcher: [String: [DirectoryItem]] = [:]
 
+    // Dispatchers that are "direct" (no sessions, e.g. external bridges).
+    private var directDispatchers: Set<String> = []
+
     public init(
         xmpp: XMPPService,
         directoryJid: String,
@@ -82,12 +85,12 @@ public final class SwitchDirectoryService: ObservableObject {
         if !dispatchersLoaded {
             refreshDispatchers()
         }
-        if let dispatcher = selectedDispatcherJid {
+        if let dispatcher = selectedDispatcherJid, !directDispatchers.contains(dispatcher) {
             refreshSessionsForDispatcher(dispatcherJid: dispatcher)
         } else {
             individuals = []
             isLoadingIndividuals = false
-            individualsLoadedOnce = false
+            individualsLoadedOnce = directDispatchers.contains(selectedDispatcherJid ?? "")
         }
     }
 
@@ -108,6 +111,16 @@ public final class SwitchDirectoryService: ObservableObject {
         chatTarget = .dispatcher(item.jid)
         lastSelectedIndividualJid = nil
         awaitingNewSession = false
+
+        // Direct dispatchers (e.g. Acorn) have no sessions — skip loading entirely.
+        if item.isDirect {
+            individuals = []
+            isLoadingIndividuals = false
+            individualsLoadedOnce = true
+            directDispatchers.insert(item.jid)
+            xmpp.ensureHistoryLoaded(with: item.jid)
+            return
+        }
 
         // Use cached sessions if we have them; still refresh in the background.
         if let cached = sessionsByDispatcher[item.jid], !cached.isEmpty {
@@ -151,7 +164,7 @@ public final class SwitchDirectoryService: ObservableObject {
         }
 
         if case .dispatcher(let dispatcherJid) = target {
-            if selectedDispatcherJid == dispatcherJid {
+            if selectedDispatcherJid == dispatcherJid, !directDispatchers.contains(dispatcherJid) {
                 knownIndividualJids = Set(individuals.map { $0.jid })
                 awaitingNewSession = true
                 pollForNewSession(dispatcherJid: dispatcherJid)
@@ -171,7 +184,7 @@ public final class SwitchDirectoryService: ObservableObject {
         }
 
         if case .dispatcher(let dispatcherJid) = target {
-            if selectedDispatcherJid == dispatcherJid {
+            if selectedDispatcherJid == dispatcherJid, !directDispatchers.contains(dispatcherJid) {
                 knownIndividualJids = Set(individuals.map { $0.jid })
                 awaitingNewSession = true
                 pollForNewSession(dispatcherJid: dispatcherJid)
@@ -275,7 +288,13 @@ public final class SwitchDirectoryService: ObservableObject {
             Task { @MainActor in
                 switch result {
                 case .success(let items):
-                    assign(items.items.map { DirectoryItem(jid: $0.jid.bareJid.stringValue, name: $0.name) })
+                    assign(items.items.map {
+                        DirectoryItem(
+                            jid: $0.jid.bareJid.stringValue,
+                            name: $0.name,
+                            isDirect: $0.node == "direct"
+                        )
+                    })
                 case .failure:
                     assign([])
                 }
