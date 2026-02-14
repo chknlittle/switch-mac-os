@@ -8,13 +8,16 @@ public struct DirectoryItem: Identifiable, Hashable, Sendable {
     public let isDirect: Bool
     /// Server-defined display order (parsed from disco node attribute).
     public let sortOrder: Int
+    /// True for closed/historical sessions shown for browsing.
+    public let isClosed: Bool
 
-    public init(jid: String, name: String?, isDirect: Bool = false, sortOrder: Int = Int.max) {
+    public init(jid: String, name: String?, isDirect: Bool = false, sortOrder: Int = Int.max, isClosed: Bool = false) {
         self.jid = jid
         self.name = name ?? jid
         self.id = jid
         self.isDirect = isDirect
         self.sortOrder = sortOrder
+        self.isClosed = isClosed
     }
 }
 

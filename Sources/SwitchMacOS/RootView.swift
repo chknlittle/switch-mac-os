@@ -187,37 +187,40 @@ private struct SidebarList: View {
 
                                 LazyVStack(alignment: .leading, spacing: 0) {
                                     if !directory.individuals.isEmpty {
-                                        // directory.individuals is sorted by recency (most recent first);
-                                        // show the oldest at the top so the most recent sits at the bottom.
-                                        ForEach(Array(directory.individuals.reversed())) { item in
-                                            SidebarRow(
-                                                title: item.name,
-                                                subtitle: nil,
-                                                showAvatar: false,
-                                                avatarData: nil,
-                                                isSelected: directory.selectedSessionJid == item.jid,
-                                                isComposing: xmpp.composingJids.contains(item.jid),
-                                                unreadCount: chatStore.unreadCount(for: item.jid),
-                                                onCancel: {
-                                                    xmpp.sendMessage(to: item.jid, body: "/cancel")
-                                                },
-                                                onCopyName: {
-                                                    NSPasteboard.general.clearContents()
-                                                    NSPasteboard.general.setString(item.name, forType: .string)
-                                                },
-                                                onResume: {
-                                                    directory.resumeSession(item)
-                                                }
-                                            ) {
-                                                directory.selectIndividual(item)
+                                        // directory.individuals is sorted: active (by recency) then closed.
+                                        // Reversed so oldest-active at top, newest-active at bottom.
+                                        // Closed sessions appear at the very top.
+                                        let reversed = Array(directory.individuals.reversed())
+                                        let closedItems = reversed.filter { $0.isClosed }
+                                        let activeItems = reversed.filter { !$0.isClosed }
+
+                                        if !closedItems.isEmpty {
+                                            Text("Recent")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 14)
+                                                .padding(.top, 6)
+                                                .padding(.bottom, 2)
+
+                                            ForEach(closedItems) { item in
+                                                sessionRow(item)
+                                                    .opacity(0.6)
                                             }
-                                            .id(item.jid)
-                                            .padding(.horizontal, 10)
+
+                                            if !activeItems.isEmpty {
+                                                Divider()
+                                                    .padding(.horizontal, 14)
+                                                    .padding(.vertical, 4)
+                                            }
+                                        }
+
+                                        ForEach(activeItems) { item in
+                                            sessionRow(item)
                                         }
                                     } else {
                                         SidebarPlaceholderRow(
                                             title: directory.isLoadingIndividuals ? "Loading sessions..." : "No sessions",
-                                            subtitle: directory.isLoadingIndividuals ? nil : "This dispatcher has no active sessions",
+                                            subtitle: directory.isLoadingIndividuals ? nil : "Send a message to start a session",
                                             isLoading: directory.isLoadingIndividuals
                                         )
                                         .padding(.horizontal, 10)
@@ -357,6 +360,33 @@ private struct SidebarList: View {
             }
         }
         .background(TintedSurface(base: Theme.windowBg, tint: Theme.accent, opacity: 0.055))
+    }
+
+    @ViewBuilder
+    private func sessionRow(_ item: DirectoryItem) -> some View {
+        SidebarRow(
+            title: item.name,
+            subtitle: nil,
+            showAvatar: false,
+            avatarData: nil,
+            isSelected: directory.selectedSessionJid == item.jid,
+            isComposing: xmpp.composingJids.contains(item.jid),
+            unreadCount: chatStore.unreadCount(for: item.jid),
+            onCancel: {
+                xmpp.sendMessage(to: item.jid, body: "/cancel")
+            },
+            onCopyName: {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(item.name, forType: .string)
+            },
+            onResume: {
+                directory.resumeSession(item)
+            }
+        ) {
+            directory.selectIndividual(item)
+        }
+        .id(item.jid)
+        .padding(.horizontal, 10)
     }
 }
 

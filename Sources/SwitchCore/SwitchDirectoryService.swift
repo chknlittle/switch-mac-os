@@ -307,23 +307,30 @@ public final class SwitchDirectoryService: ObservableObject {
                 switch result {
                 case .success(let items):
                     let mapped = items.items.map { item -> DirectoryItem in
-                        // Node format: "N" or "N:direct" where N is the sort position.
+                        // Dispatcher node format: "N" or "N:direct" (sort position).
+                        // Session node format: nil (active) or "closed".
                         var isDirect = false
+                        var isClosed = false
                         var sortOrder = Int.max
                         if let nodeStr = item.node {
-                            let parts = nodeStr.split(separator: ":", maxSplits: 1)
-                            if let pos = Int(parts[0]) {
-                                sortOrder = pos
-                            }
-                            if parts.count > 1, parts[1] == "direct" {
-                                isDirect = true
+                            if nodeStr == "closed" {
+                                isClosed = true
+                            } else {
+                                let parts = nodeStr.split(separator: ":", maxSplits: 1)
+                                if let pos = Int(parts[0]) {
+                                    sortOrder = pos
+                                }
+                                if parts.count > 1, parts[1] == "direct" {
+                                    isDirect = true
+                                }
                             }
                         }
                         return DirectoryItem(
                             jid: item.jid.bareJid.stringValue,
                             name: item.name,
                             isDirect: isDirect,
-                            sortOrder: sortOrder
+                            sortOrder: sortOrder,
+                            isClosed: isClosed
                         )
                     }.sorted { $0.sortOrder < $1.sortOrder }
                     assign(mapped)
@@ -421,7 +428,8 @@ public final class SwitchDirectoryService: ObservableObject {
         for child in payload.children where child.name == "session" {
             guard let jid = child.attribute("jid") else { continue }
             let name = child.attribute("name")
-            items.append(DirectoryItem(jid: jid, name: name))
+            let isClosed = child.attribute("status") == "closed"
+            items.append(DirectoryItem(jid: jid, name: name, isClosed: isClosed))
         }
         return items
     }
@@ -465,14 +473,17 @@ public final class SwitchDirectoryService: ObservableObject {
         let limit = max(0, min(parsed, 5000))
         guard limit > 0 else { return }
 
-        for item in individuals.prefix(limit) {
+        for item in individuals.filter({ !$0.isClosed }).prefix(limit) {
             xmpp.ensureRecencyProbed(with: item.jid)
         }
     }
 
     private func sortByRecency(_ items: [DirectoryItem]) -> [DirectoryItem] {
+        // Active sessions sorted by recency, closed sessions keep server order at the end.
+        let active = items.filter { !$0.isClosed }
+        let closed = items.filter { $0.isClosed }
         let chatStore = xmpp.chatStore
-        return items.sorted { a, b in
+        let sortedActive = active.sorted { a, b in
             let aTime = chatStore.lastActivityByThread[a.jid] ?? chatStore.messages(for: a.jid).last?.timestamp ?? .distantPast
             let bTime = chatStore.lastActivityByThread[b.jid] ?? chatStore.messages(for: b.jid).last?.timestamp ?? .distantPast
             if aTime != bTime {
@@ -483,6 +494,7 @@ public final class SwitchDirectoryService: ObservableObject {
             }
             return a.jid.localizedStandardCompare(b.jid) == .orderedAscending
         }
+        return sortedActive + closed
     }
 
 }
