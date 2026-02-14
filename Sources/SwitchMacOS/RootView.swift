@@ -1181,11 +1181,11 @@ private struct ChatPane: View {
                         Text("\(tokensTotal)tok")
                             .font(.system(size: 9, weight: .regular, design: .monospaced))
                     }
-                    if let cost = stats.costUsd {
+                    if let cost = formattedCost(stats.costUsd) {
                         Text("$\(cost)")
                             .font(.system(size: 9, weight: .regular, design: .monospaced))
                     }
-                    if let duration = stats.durationS {
+                    if let duration = formattedDuration(stats.durationS) {
                         Text("\(duration)s")
                             .font(.system(size: 9, weight: .regular, design: .monospaced))
                     }
@@ -1195,7 +1195,7 @@ private struct ChatPane: View {
                     }
                 }
 
-                if let summary = stats.summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+                if let summary = condensedSummary(stats.summary) {
                     Text(summary)
                         .font(.system(size: 9, weight: .regular, design: .monospaced))
                 }
@@ -1209,9 +1209,45 @@ private struct ChatPane: View {
 
         private func runTokensPerSecond(_ stats: RunStats) -> String? {
             guard let duration = numericValue(stats.durationS), duration > 0 else { return nil }
-            let tokens = numericValue(stats.tokensOut) ?? numericValue(stats.tokensTotal)
+
+            // Prefer overall throughput (total processed tokens) over pure output
+            // throughput so TPS better matches operator expectations for long-context runs.
+            let tokensFromTotal = numericValue(stats.tokensTotal)
+            let tokensFromInOut: Double? = {
+                guard let tokensIn = numericValue(stats.tokensIn),
+                      let tokensOut = numericValue(stats.tokensOut) else { return nil }
+                return tokensIn + tokensOut
+            }()
+            let tokens = tokensFromTotal ?? tokensFromInOut ?? numericValue(stats.tokensOut)
             guard let tokens, tokens > 0 else { return nil }
             return String(format: "%.1f", tokens / duration)
+        }
+
+        private func formattedDuration(_ raw: String?) -> String? {
+            guard let value = numericValue(raw), value > 0 else { return nil }
+            return String(format: "%.1f", value)
+        }
+
+        private func formattedCost(_ raw: String?) -> String? {
+            guard let value = numericValue(raw), value >= 0 else { return nil }
+            return String(format: "%.3f", value)
+        }
+
+        private func condensedSummary(_ raw: String?) -> String? {
+            guard var summary = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else {
+                return nil
+            }
+
+            if summary.hasPrefix("["), let close = summary.firstIndex(of: "]") {
+                let tail = summary[summary.index(after: close)...]
+                summary = String(tail).trimmingCharacters(in: .whitespacesAndNewlines)
+                while summary.hasPrefix("|") || summary.hasPrefix("-") {
+                    summary.removeFirst()
+                    summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+
+            return summary.isEmpty ? nil : summary
         }
 
         private func numericValue(_ raw: String?) -> Double? {

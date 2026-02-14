@@ -46,13 +46,14 @@ struct DispatcherHotkeysCommands: Commands {
 
 @MainActor
 final class DispatcherHotkeyMonitor {
-    // Physical key codes for the number row 1-5 (same on QWERTY, Dvorak, Programmer Dvorak, etc.)
+    // Physical key codes for the number row 1-6 (same on QWERTY, Dvorak, Programmer Dvorak, etc.)
     private static let slotKeyCode: [UInt16: Int] = [
         18: 1, // 1
         19: 2, // 2
         20: 3, // 3
         21: 4, // 4
         23: 5, // 5
+        22: 6, // 6
     ]
 
     private var monitor: Any?
@@ -73,7 +74,7 @@ final class DispatcherHotkeyMonitor {
             let interesting: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
             let held = event.modifierFlags.intersection(interesting)
 
-            // Cmd+1..5: select dispatcher (5 targets default oc@ dispatcher).
+            // Cmd+1..6: select dispatcher (5 targets default oc@ dispatcher).
             if held == .command, let slot = Self.slotKeyCode[event.keyCode] {
                 return self.handleSlot(slot) ? nil : event
             }
@@ -115,6 +116,15 @@ final class DispatcherHotkeyMonitor {
             return true
         }
 
+        if let configuredTarget = model?.config?.switchDispatcherHotkeyTargets[slot] {
+            if let matched = Self.dispatcherMatching(configuredTarget, in: directory.dispatchers) {
+                directory.selectDispatcher(matched)
+                return true
+            }
+            NSSound.beep()
+            return true
+        }
+
         if slot == 5 {
             if let oc = Self.defaultOCDispatcher(in: directory.dispatchers) {
                 directory.selectDispatcher(oc)
@@ -138,6 +148,20 @@ final class DispatcherHotkeyMonitor {
         dispatchers.first { $0.jid.lowercased().hasPrefix("oc@") }
             ?? dispatchers.first { $0.name.lowercased().contains("opencode") }
             ?? dispatchers.first { $0.name.lowercased() == "oc" }
+    }
+
+    static func dispatcherMatching(_ target: String, in dispatchers: [DirectoryItem]) -> DirectoryItem? {
+        let needle = target.lowercased()
+
+        if let exact = dispatchers.first(where: { $0.jid.lowercased() == needle }) {
+            return exact
+        }
+
+        if let byJidPrefix = dispatchers.first(where: { $0.jid.lowercased().hasPrefix(needle) }) {
+            return byJidPrefix
+        }
+
+        return dispatchers.first(where: { $0.name.lowercased().hasPrefix(needle) })
     }
 
     /// Only defer to the text field when it actually has text (so Shift+Arrow
