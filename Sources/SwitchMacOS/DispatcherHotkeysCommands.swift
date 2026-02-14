@@ -15,6 +15,13 @@ struct DispatcherHotkeysCommands: Commands {
                     model.directory?.selectDispatcher(item)
                 }
             }
+
+            Divider()
+
+            Button("Focus Oldest Waiting Session  \u{21e7}\u{2318}\u{2191}") {
+                _ = model.directory?.focusOldestWaitingSession()
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
         }
     }
 }
@@ -63,6 +70,13 @@ final class DispatcherHotkeyMonitor {
                 }
             }
 
+            // Cmd+Shift+Up: jump to the session waiting longest.
+            if held == [.command, .shift], !Self.isEditingText {
+                if event.keyCode == Self.upArrowKeyCode {
+                    return self.handleOldestWaitingSession() ? nil : event
+                }
+            }
+
             return event
         }
     }
@@ -107,6 +121,20 @@ final class DispatcherHotkeyMonitor {
         case .down:
             directory.selectNextSession()
         }
+        return true
+    }
+
+    private func handleOldestWaitingSession() -> Bool {
+        guard let directory = model?.directory else {
+            NSSound.beep()
+            return true
+        }
+
+        if directory.focusOldestWaitingSession() {
+            return true
+        }
+
+        NSSound.beep()
         return true
     }
 }

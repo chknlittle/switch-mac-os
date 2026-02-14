@@ -249,9 +249,102 @@ public final class SwitchDirectoryService: ObservableObject {
         }
     }
 
+    /// Jump to the session that has been waiting for a reply the longest.
+    /// Returns true when a target session was found and selected.
+    @discardableResult
+    public func focusOldestWaitingSession() -> Bool {
+        let unread = xmpp.chatStore.unreadByThread
+        guard !unread.isEmpty else { return false }
+
+        let dispatcherJids = Set(dispatchers.map { $0.jid })
+
+        let candidates: [(jid: String, waitingSince: Date, dispatcherJid: String?)] = unread.compactMap { threadJid, count in
+            guard count > 0 else { return nil }
+
+            // This action targets sessions, not dispatcher chats.
+            if dispatcherJids.contains(threadJid) {
+                return nil
+            }
+
+            let waitingSince = oldestUnreadTimestamp(for: threadJid, unreadCount: count)
+                ?? xmpp.chatStore.lastActivityByThread[threadJid]
+                ?? Date.distantFuture
+            return (threadJid, waitingSince, dispatcherForSession(threadJid))
+        }
+
+        guard let target = candidates.min(by: { a, b in
+            if a.waitingSince != b.waitingSince {
+                return a.waitingSince < b.waitingSince
+            }
+            return a.jid.localizedStandardCompare(b.jid) == .orderedAscending
+        }) else {
+            return false
+        }
+
+        selectSessionThread(jid: target.jid, dispatcherJid: target.dispatcherJid)
+        return true
+    }
+
     public func messagesForActiveChat() -> [ChatMessage] {
         guard let target = chatTarget else { return [] }
         return xmpp.chatStore.messages(for: target.jid)
+    }
+
+    private func oldestUnreadTimestamp(for threadJid: String, unreadCount: Int) -> Date? {
+        guard unreadCount > 0 else { return nil }
+        let messages = xmpp.chatStore.messages(for: threadJid)
+        guard !messages.isEmpty else { return nil }
+
+        var remaining = unreadCount
+        for msg in messages.reversed() where msg.direction == .incoming {
+            remaining -= 1
+            if remaining <= 0 {
+                return msg.timestamp
+            }
+        }
+
+        return messages.last(where: { $0.direction == .incoming })?.timestamp
+    }
+
+    private func dispatcherForSession(_ sessionJid: String) -> String? {
+        if let selected = selectedDispatcherJid,
+           individuals.contains(where: { $0.jid == sessionJid }) {
+            return selected
+        }
+
+        for (dispatcherJid, sessionJids) in dispatcherToSessions {
+            if sessionJids.contains(sessionJid) {
+                return dispatcherJid
+            }
+        }
+
+        for (dispatcherJid, cachedItems) in sessionsByDispatcher {
+            if cachedItems.contains(where: { $0.jid == sessionJid }) {
+                return dispatcherJid
+            }
+        }
+
+        return nil
+    }
+
+    private func selectSessionThread(jid sessionJid: String, dispatcherJid: String?) {
+        if let dispatcherJid,
+           selectedDispatcherJid != dispatcherJid,
+           let dispatcherItem = dispatchers.first(where: { $0.jid == dispatcherJid }) {
+            selectDispatcher(dispatcherItem)
+        }
+
+        let selectedDispatcher = dispatcherJid ?? selectedDispatcherJid
+        let knownItem = individuals.first(where: { $0.jid == sessionJid })
+            ?? (selectedDispatcher.flatMap { sessionsByDispatcher[$0] }?.first(where: { $0.jid == sessionJid }))
+
+        if let knownItem {
+            selectIndividual(knownItem)
+            return
+        }
+
+        // Fallback when we only know the thread JID from unread counters.
+        selectIndividual(DirectoryItem(jid: sessionJid, name: nil))
     }
 
     private func pollForNewSession(dispatcherJid: String, remaining: Int = 5) {
