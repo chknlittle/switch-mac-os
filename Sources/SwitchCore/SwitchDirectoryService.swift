@@ -254,11 +254,9 @@ public final class SwitchDirectoryService: ObservableObject {
     @discardableResult
     public func focusOldestWaitingSession() -> Bool {
         let unread = xmpp.chatStore.unreadByThread
-        guard !unread.isEmpty else { return false }
-
         let dispatcherJids = Set(dispatchers.map { $0.jid })
 
-        let candidates: [(jid: String, waitingSince: Date, dispatcherJid: String?)] = unread.compactMap { threadJid, count in
+        let waitingCandidates: [(jid: String, waitingSince: Date, dispatcherJid: String?)] = unread.compactMap { threadJid, count in
             guard count > 0 else { return nil }
 
             // This action targets sessions, not dispatcher chats.
@@ -272,17 +270,24 @@ public final class SwitchDirectoryService: ObservableObject {
             return (threadJid, waitingSince, dispatcherForSession(threadJid))
         }
 
-        guard let target = candidates.min(by: { a, b in
+        if let target = waitingCandidates.min(by: { a, b in
             if a.waitingSince != b.waitingSince {
                 return a.waitingSince < b.waitingSince
             }
             return a.jid.localizedStandardCompare(b.jid) == .orderedAscending
-        }) else {
-            return false
+        }) {
+            selectSessionThread(jid: target.jid, dispatcherJid: target.dispatcherJid)
+            return true
         }
 
-        selectSessionThread(jid: target.jid, dispatcherJid: target.dispatcherJid)
-        return true
+        // Fallback: if nothing is currently unread, still jump to the most
+        // recent known session so the shortcut always does something useful.
+        if let fallback = mostRecentKnownSession(excludingDispatchers: dispatcherJids) {
+            selectSessionThread(jid: fallback.jid, dispatcherJid: fallback.dispatcherJid)
+            return true
+        }
+
+        return false
     }
 
     public func messagesForActiveChat() -> [ChatMessage] {
@@ -312,16 +317,14 @@ public final class SwitchDirectoryService: ObservableObject {
             return selected
         }
 
-        for (dispatcherJid, sessionJids) in dispatcherToSessions {
-            if sessionJids.contains(sessionJid) {
-                return dispatcherJid
-            }
+        if let fromLiveMap = dispatcherToSessions.first(where: { $0.value.contains(sessionJid) })?.key {
+            return fromLiveMap
         }
 
-        for (dispatcherJid, cachedItems) in sessionsByDispatcher {
-            if cachedItems.contains(where: { $0.jid == sessionJid }) {
-                return dispatcherJid
-            }
+        if let fromCache = sessionsByDispatcher.first(where: { _, items in
+            items.contains(where: { $0.jid == sessionJid })
+        })?.key {
+            return fromCache
         }
 
         return nil
@@ -345,6 +348,28 @@ public final class SwitchDirectoryService: ObservableObject {
 
         // Fallback when we only know the thread JID from unread counters.
         selectIndividual(DirectoryItem(jid: sessionJid, name: nil))
+    }
+
+    private func mostRecentKnownSession(excludingDispatchers dispatcherJids: Set<String>) -> (jid: String, dispatcherJid: String?)? {
+        var sessionJids: Set<String> = Set(individuals.map(\.jid))
+        sessionJids.formUnion(dispatcherToSessions.values.flatMap { $0 })
+        sessionJids.formUnion(sessionsByDispatcher.values.flatMap { $0.map(\.jid) })
+
+        sessionJids = sessionJids.subtracting(dispatcherJids)
+        guard !sessionJids.isEmpty else { return nil }
+
+        let activity = xmpp.chatStore.lastActivityByThread
+        let bestJid = sessionJids.max { a, b in
+            let aTime = activity[a] ?? Date.distantPast
+            let bTime = activity[b] ?? Date.distantPast
+            if aTime != bTime {
+                return aTime < bTime
+            }
+            return a.localizedStandardCompare(b) == .orderedAscending
+        }
+
+        guard let bestJid else { return nil }
+        return (bestJid, dispatcherForSession(bestJid))
     }
 
     private func pollForNewSession(dispatcherJid: String, remaining: Int = 5) {

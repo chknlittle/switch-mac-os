@@ -22,6 +22,11 @@ struct DispatcherHotkeysCommands: Commands {
                 _ = model.directory?.focusOldestWaitingSession()
             }
             .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
+
+            Button("Focus Oldest Waiting Session (Alt)  \u{21e7}\u{2318}L") {
+                _ = model.directory?.focusOldestWaitingSession()
+            }
+            .keyboardShortcut("l", modifiers: [.command, .shift])
         }
     }
 }
@@ -48,6 +53,7 @@ final class DispatcherHotkeyMonitor {
     // Key codes for arrow keys.
     private static let upArrowKeyCode: UInt16 = 126
     private static let downArrowKeyCode: UInt16 = 125
+    private static let lKeyCode: UInt16 = 37
 
     func install() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -62,17 +68,20 @@ final class DispatcherHotkeyMonitor {
 
             // Shift+Up/Down: navigate sessions (skip when text field has content).
             if held == .shift, !Self.isEditingText {
-                if event.keyCode == Self.upArrowKeyCode {
+                switch event.keyCode {
+                case Self.upArrowKeyCode:
                     return self.handleSessionNav(direction: .up) ? nil : event
-                }
-                if event.keyCode == Self.downArrowKeyCode {
+                case Self.downArrowKeyCode:
                     return self.handleSessionNav(direction: .down) ? nil : event
+                default:
+                    break
                 }
             }
 
-            // Cmd+Shift+Up: jump to the session waiting longest.
-            if held == [.command, .shift], !Self.isEditingText {
-                if event.keyCode == Self.upArrowKeyCode {
+            // Cmd+Shift+Up or Cmd+Shift+L: jump to the session waiting longest.
+            // Do not gate on text editing; this is a global navigation action.
+            if held == [.command, .shift] {
+                if [Self.upArrowKeyCode, Self.lKeyCode].contains(event.keyCode) {
                     return self.handleOldestWaitingSession() ? nil : event
                 }
             }

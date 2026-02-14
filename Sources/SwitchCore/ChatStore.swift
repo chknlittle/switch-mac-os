@@ -185,7 +185,8 @@ public final class ChatStore: ObservableObject {
         )
         let inserted = appendIfMissing(msg)
         if inserted && !isArchived {
-            if activeThreadJid != threadJid {
+            let shouldCountAsUnread = !(meta?.isToolRelated ?? false)
+            if shouldCountAsUnread && activeThreadJid != threadJid {
                 unreadByThread[threadJid, default: 0] += 1
             }
             liveIncomingMessage.send(msg)
