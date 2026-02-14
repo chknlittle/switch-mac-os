@@ -1906,7 +1906,9 @@ private struct MarkdownMessage: View {
     let xhtmlBody: String?
 
     var body: some View {
-        if let xhtmlBody, let rich = htmlText(xhtmlBody) {
+        if let xhtmlBody,
+           shouldUseXHTML(xhtmlBody: xhtmlBody, content: content),
+           let rich = htmlText(xhtmlBody) {
             return messageText(rich)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
@@ -1956,6 +1958,28 @@ private struct MarkdownMessage: View {
             return Text(attr)
         }
         return Text(trimmed.string)
+    }
+
+    private func shouldUseXHTML(xhtmlBody: String, content: String) -> Bool {
+        let html = xhtmlBody.lowercased()
+        let contentLooksInlineMarkdown =
+            content.contains("**") ||
+            content.contains("__") ||
+            content.contains("`")
+
+        let xhtmlHasInlineStyling =
+            html.contains("<strong") ||
+            html.contains("<b>") ||
+            html.contains("<em") ||
+            html.contains("<code") ||
+            html.contains("<pre")
+
+        if contentLooksInlineMarkdown && !xhtmlHasInlineStyling {
+            // Prefer markdown rendering when XHTML is only structural and would
+            // otherwise show literal inline markdown markers like **bold** or `code`.
+            return false
+        }
+        return true
     }
 
     private func trimTrailingNewlines(_ input: NSAttributedString) -> NSAttributedString {
