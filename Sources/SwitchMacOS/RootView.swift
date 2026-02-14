@@ -200,6 +200,13 @@ private struct SidebarList: View {
                                                 unreadCount: chatStore.unreadCount(for: item.jid),
                                                 onCancel: {
                                                     xmpp.sendMessage(to: item.jid, body: "/cancel")
+                                                },
+                                                onCopyName: {
+                                                    NSPasteboard.general.clearContents()
+                                                    NSPasteboard.general.setString(item.name, forType: .string)
+                                                },
+                                                onResume: {
+                                                    directory.resumeSession(item)
                                                 }
                                             ) {
                                                 directory.selectIndividual(item)
@@ -441,7 +448,11 @@ private struct SidebarRow: View {
     let isComposing: Bool
     let unreadCount: Int
     let onCancel: (() -> Void)?
+    let onCopyName: (() -> Void)?
+    let onResume: (() -> Void)?
     let onSelect: () -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -473,6 +484,26 @@ private struct SidebarRow: View {
                     .help("Send /cancel")
                 }
             }
+            if isHovering && !isComposing {
+                if let onResume {
+                    Button(action: onResume) {
+                        Image(systemName: "arrow.forward.circle")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Resume in new session")
+                }
+                if let onCopyName {
+                    Button(action: onCopyName) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Copy session name")
+                }
+            }
             if unreadCount > 0 {
                 UnreadBadge(count: unreadCount)
             }
@@ -481,6 +512,7 @@ private struct SidebarRow: View {
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
+        .onHover { isHovering = $0 }
         .background(isSelected ? Theme.selectedRow : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }

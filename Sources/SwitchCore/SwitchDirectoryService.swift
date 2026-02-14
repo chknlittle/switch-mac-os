@@ -150,6 +150,24 @@ public final class SwitchDirectoryService: ObservableObject {
         xmpp.ensureHistoryLoaded(with: item.jid)
     }
 
+    /// Resume an old session by sending a pickup message to the current dispatcher.
+    public func resumeSession(_ item: DirectoryItem) {
+        guard let dispatcherJid = selectedDispatcherJid else { return }
+
+        // Switch chat target to the dispatcher so the message goes there.
+        selectedSessionJid = nil
+        chatTarget = .dispatcher(dispatcherJid)
+        lastSelectedIndividualJid = nil
+
+        let body = "pick up where the '\(item.name)' switch session left off"
+        xmpp.sendMessage(to: dispatcherJid, body: body)
+
+        // Poll for the new session to appear.
+        knownIndividualJids = Set(individuals.map { $0.jid })
+        awaitingNewSession = true
+        pollForNewSession(dispatcherJid: dispatcherJid)
+    }
+
     public func sendChat(body: String) {
         guard let target = chatTarget else { return }
         let jid = target.jid
