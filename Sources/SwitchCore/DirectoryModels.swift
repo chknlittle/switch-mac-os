@@ -6,12 +6,15 @@ public struct DirectoryItem: Identifiable, Hashable, Sendable {
     public let name: String
     /// True for dispatchers that have no sessions (e.g. external bridges).
     public let isDirect: Bool
+    /// Server-defined display order (parsed from disco node attribute).
+    public let sortOrder: Int
 
-    public init(jid: String, name: String?, isDirect: Bool = false) {
+    public init(jid: String, name: String?, isDirect: Bool = false, sortOrder: Int = Int.max) {
         self.jid = jid
         self.name = name ?? jid
         self.id = jid
         self.isDirect = isDirect
+        self.sortOrder = sortOrder
     }
 }
 

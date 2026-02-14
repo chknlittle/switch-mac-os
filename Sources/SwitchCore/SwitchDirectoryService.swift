@@ -306,13 +306,27 @@ public final class SwitchDirectoryService: ObservableObject {
             Task { @MainActor in
                 switch result {
                 case .success(let items):
-                    assign(items.items.map {
-                        DirectoryItem(
-                            jid: $0.jid.bareJid.stringValue,
-                            name: $0.name,
-                            isDirect: $0.node == "direct"
+                    let mapped = items.items.map { item -> DirectoryItem in
+                        // Node format: "N" or "N:direct" where N is the sort position.
+                        var isDirect = false
+                        var sortOrder = Int.max
+                        if let nodeStr = item.node {
+                            let parts = nodeStr.split(separator: ":", maxSplits: 1)
+                            if let pos = Int(parts[0]) {
+                                sortOrder = pos
+                            }
+                            if parts.count > 1, parts[1] == "direct" {
+                                isDirect = true
+                            }
+                        }
+                        return DirectoryItem(
+                            jid: item.jid.bareJid.stringValue,
+                            name: item.name,
+                            isDirect: isDirect,
+                            sortOrder: sortOrder
                         )
-                    })
+                    }.sorted { $0.sortOrder < $1.sortOrder }
+                    assign(mapped)
                 case .failure:
                     assign([])
                 }
