@@ -55,6 +55,7 @@ public final class SwitchDirectoryService: ObservableObject {
     // Sorting can cause visible list "jitter" while history loads; debounce and
     // briefly suppress resorting during initial loads.
     private var resortWorkItem: DispatchWorkItem? = nil
+    private var resortAfterSuppressionWorkItem: DispatchWorkItem? = nil
     private var suppressResortUntil: Date = .distantPast
 
     // Cache sessions per dispatcher so switching back is instant.
@@ -328,6 +329,7 @@ public final class SwitchDirectoryService: ObservableObject {
         if selectedDispatcherJid == dispatcherJid {
             individuals = sorted
             suppressResortUntil = Date().addingTimeInterval(1.5)
+            scheduleResortAfterSuppression()
             probeRecencyForAllSessions()
             loadHistoryForAllSessions()
             autoSelectNewSessionIfNeeded()
@@ -487,6 +489,22 @@ public final class SwitchDirectoryService: ObservableObject {
         }
         resortWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    private func scheduleResortAfterSuppression() {
+        resortAfterSuppressionWorkItem?.cancel()
+        let delay = max(0.05, suppressResortUntil.timeIntervalSinceNow + 0.05)
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.resortAfterSuppressionWorkItem = nil
+                if self.isLoadingIndividuals { return }
+                if self.xmpp.isHistoryWarmup { return }
+                self.resortIndividualsByRecency()
+            }
+        }
+        resortAfterSuppressionWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func resortIndividualsByRecency() {
