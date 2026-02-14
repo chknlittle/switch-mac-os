@@ -251,7 +251,7 @@ public final class SwitchDirectoryService: ObservableObject {
         ensureSubscribed(to: node)
         queryItems(node: node) { [weak self] items in
             guard let self else { return }
-            self.dispatchers = self.sortDispatchersByRecency(items)
+            self.dispatchers = items
             self.dispatchersLoaded = true
 
             // If nothing is selected yet, pick the first dispatcher and load sessions.
@@ -423,7 +423,6 @@ public final class SwitchDirectoryService: ObservableObject {
                 if self.xmpp.isHistoryWarmup { return }
                 if Date() < self.suppressResortUntil { return }
                 self.resortIndividualsByRecency()
-                self.resortDispatchersByRecency()
             }
         }
         resortWorkItem = work
@@ -433,11 +432,6 @@ public final class SwitchDirectoryService: ObservableObject {
     private func resortIndividualsByRecency() {
         guard !individuals.isEmpty else { return }
         individuals = sortByRecency(individuals)
-    }
-
-    private func resortDispatchersByRecency() {
-        guard !dispatchers.isEmpty else { return }
-        dispatchers = sortDispatchersByRecency(dispatchers)
     }
 
     private func loadHistoryForAllSessions() {
@@ -477,35 +471,4 @@ public final class SwitchDirectoryService: ObservableObject {
         }
     }
 
-    private func sortDispatchersByRecency(_ items: [DirectoryItem]) -> [DirectoryItem] {
-        let chatStore = xmpp.chatStore
-        return items.sorted { a, b in
-            let aTime = lastActivityForDispatcher(a.jid, chatStore: chatStore)
-            let bTime = lastActivityForDispatcher(b.jid, chatStore: chatStore)
-            if aTime != bTime {
-                return aTime > bTime
-            }
-            if a.name != b.name {
-                return a.name.localizedStandardCompare(b.name) == .orderedAscending
-            }
-            return a.jid.localizedStandardCompare(b.jid) == .orderedAscending
-        }
-    }
-
-    private func lastActivityForDispatcher(_ dispatcherJid: String, chatStore: ChatStore) -> Date {
-        let dispatcherTime = chatStore.lastActivityByThread[dispatcherJid] ?? chatStore.messages(for: dispatcherJid).last?.timestamp ?? .distantPast
-
-        var latestTime = dispatcherTime
-
-        if selectedDispatcherJid == dispatcherJid {
-            for item in individuals {
-                let t = chatStore.lastActivityByThread[item.jid] ?? chatStore.messages(for: item.jid).last?.timestamp ?? .distantPast
-                if t > latestTime {
-                    latestTime = t
-                }
-            }
-        }
-
-        return latestTime
-    }
 }
