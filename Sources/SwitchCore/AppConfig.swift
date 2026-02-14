@@ -7,6 +7,7 @@ public struct AppConfig: Sendable {
     public let xmppPassword: String
     public let switchDirectoryJid: String?
     public let switchPubSubJid: String?
+    public let switchConvenienceDispatchers: [DirectoryItem]
 
     public init(
         xmppHost: String,
@@ -14,7 +15,8 @@ public struct AppConfig: Sendable {
         xmppJid: String,
         xmppPassword: String,
         switchDirectoryJid: String?,
-        switchPubSubJid: String?
+        switchPubSubJid: String?,
+        switchConvenienceDispatchers: [DirectoryItem]
     ) {
         self.xmppHost = xmppHost
         self.xmppPort = xmppPort
@@ -22,6 +24,7 @@ public struct AppConfig: Sendable {
         self.xmppPassword = xmppPassword
         self.switchDirectoryJid = switchDirectoryJid
         self.switchPubSubJid = switchPubSubJid
+        self.switchConvenienceDispatchers = switchConvenienceDispatchers
     }
 
     public static func load() throws -> AppConfig {
@@ -44,14 +47,57 @@ public struct AppConfig: Sendable {
         let pubsub = env["SWITCH_PUBSUB_JID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let pubsubJid = (pubsub?.isEmpty == false) ? pubsub : nil
 
+        let convenienceDispatchers = parseConvenienceDispatchers(
+            env["SWITCH_CONVENIENCE_DISPATCHERS"]
+        )
+
         return AppConfig(
             xmppHost: host,
             xmppPort: port,
             xmppJid: jid,
             xmppPassword: password,
             switchDirectoryJid: directoryJid,
-            switchPubSubJid: pubsubJid
+            switchPubSubJid: pubsubJid,
+            switchConvenienceDispatchers: convenienceDispatchers
         )
+    }
+
+    private static func parseConvenienceDispatchers(_ raw: String?) -> [DirectoryItem] {
+        guard let raw else { return [] }
+
+        var result: [DirectoryItem] = []
+        var seen: Set<String> = []
+
+        for token in raw.split(separator: ",") {
+            let entry = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if entry.isEmpty { continue }
+
+            var label: String? = nil
+            var jid = entry
+            if let eq = entry.firstIndex(of: "=") {
+                label = String(entry[..<eq]).trimmingCharacters(in: .whitespacesAndNewlines)
+                jid = String(entry[entry.index(after: eq)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            if jid.isEmpty || seen.contains(jid) {
+                continue
+            }
+            seen.insert(jid)
+
+            let fallbackName = String(jid.split(separator: "@").first ?? Substring(jid))
+            let name = label.flatMap { $0.isEmpty ? nil : $0 } ?? fallbackName
+
+            result.append(
+                DirectoryItem(
+                    jid: jid,
+                    name: name,
+                    isDirect: true,
+                    sortOrder: Int.max
+                )
+            )
+        }
+
+        return result
     }
 }
 

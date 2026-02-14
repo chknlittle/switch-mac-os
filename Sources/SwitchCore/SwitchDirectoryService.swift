@@ -43,6 +43,7 @@ public final class SwitchDirectoryService: ObservableObject {
     private let directoryBareJid: BareJID
     private let pubSubBareJid: BareJID?
     private let nodes: SwitchDirectoryNodes
+    private let convenienceDispatchers: [DirectoryItem]
     private var cancellables: Set<AnyCancellable> = []
     private var subscribedNodes: Set<String> = []
     private var pendingSubscriptions: Set<String> = []
@@ -68,6 +69,7 @@ public final class SwitchDirectoryService: ObservableObject {
         xmpp: XMPPService,
         directoryJid: String,
         pubSubJid: String?,
+        convenienceDispatchers: [DirectoryItem] = [],
         nodes: SwitchDirectoryNodes = SwitchDirectoryNodes()
     ) {
         self.xmpp = xmpp
@@ -79,6 +81,7 @@ public final class SwitchDirectoryService: ObservableObject {
         // PubSub service is often a domain JID (e.g. pubsub.example.com).
         self.pubSubBareJid = pubSubJid.map { JID($0).bareJid }
         self.nodes = nodes
+        self.convenienceDispatchers = convenienceDispatchers
         bindPubSubRefresh()
     }
 
@@ -408,7 +411,7 @@ public final class SwitchDirectoryService: ObservableObject {
         ensureSubscribed(to: node)
         queryItems(node: node) { [weak self] items in
             guard let self else { return }
-            self.dispatchers = items
+            self.dispatchers = self.mergedDispatchersWithConvenienceContacts(items)
             self.dispatchersLoaded = true
 
             // If nothing is selected yet, pick the first dispatcher and load sessions.
@@ -416,6 +419,16 @@ public final class SwitchDirectoryService: ObservableObject {
                 self.selectDispatcher(first)
             }
         }
+    }
+
+    private func mergedDispatchersWithConvenienceContacts(_ serverItems: [DirectoryItem]) -> [DirectoryItem] {
+        var merged = serverItems
+        let existing = Set(serverItems.map { $0.jid })
+        for item in convenienceDispatchers where !existing.contains(item.jid) {
+            merged.append(item)
+            directDispatchers.insert(item.jid)
+        }
+        return merged
     }
 
     // MARK: - Sessions (direct query, no groups indirection)

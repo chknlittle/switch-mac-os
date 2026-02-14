@@ -8,11 +8,22 @@ import SwitchCore
 struct DispatcherHotkeysCommands: Commands {
     @ObservedObject var model: SwitchAppModel
 
+    private var defaultOCDispatcher: DirectoryItem? {
+        let dispatchers = model.directory?.dispatchers ?? []
+        return DispatcherHotkeyMonitor.defaultOCDispatcher(in: dispatchers)
+    }
+
     var body: some Commands {
         CommandMenu("Dispatchers") {
             ForEach(Array((model.directory?.dispatchers ?? []).prefix(4).enumerated()), id: \.offset) { idx, item in
                 Button("Select \(idx + 1): \(item.name)  \u{2318}\(idx + 1)") {
                     model.directory?.selectDispatcher(item)
+                }
+            }
+
+            if let oc = defaultOCDispatcher {
+                Button("Select 5: \(oc.name)  \u{2318}5") {
+                    model.directory?.selectDispatcher(oc)
                 }
             }
 
@@ -35,12 +46,13 @@ struct DispatcherHotkeysCommands: Commands {
 
 @MainActor
 final class DispatcherHotkeyMonitor {
-    // Physical key codes for the number row 1-4 (same on QWERTY, Dvorak, Programmer Dvorak, etc.)
+    // Physical key codes for the number row 1-5 (same on QWERTY, Dvorak, Programmer Dvorak, etc.)
     private static let slotKeyCode: [UInt16: Int] = [
         18: 1, // 1
         19: 2, // 2
         20: 3, // 3
         21: 4, // 4
+        23: 5, // 5
     ]
 
     private var monitor: Any?
@@ -61,7 +73,7 @@ final class DispatcherHotkeyMonitor {
             let interesting: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
             let held = event.modifierFlags.intersection(interesting)
 
-            // Cmd+1..4: select dispatcher.
+            // Cmd+1..5: select dispatcher (5 targets default oc@ dispatcher).
             if held == .command, let slot = Self.slotKeyCode[event.keyCode] {
                 return self.handleSlot(slot) ? nil : event
             }
@@ -95,9 +107,19 @@ final class DispatcherHotkeyMonitor {
         monitor = nil
     }
 
-    /// Select the Nth dispatcher in display order (Cmd+1 = first, etc.)
+    /// Select the Nth dispatcher in display order (Cmd+1 = first, etc.).
+    /// Cmd+5 targets the preferred oc@ dispatcher if available.
     private func handleSlot(_ slot: Int) -> Bool {
         guard let directory = model?.directory else {
+            NSSound.beep()
+            return true
+        }
+
+        if slot == 5 {
+            if let oc = Self.defaultOCDispatcher(in: directory.dispatchers) {
+                directory.selectDispatcher(oc)
+                return true
+            }
             NSSound.beep()
             return true
         }
@@ -110,6 +132,12 @@ final class DispatcherHotkeyMonitor {
 
         directory.selectDispatcher(directory.dispatchers[index])
         return true
+    }
+
+    static func defaultOCDispatcher(in dispatchers: [DirectoryItem]) -> DirectoryItem? {
+        dispatchers.first { $0.jid.lowercased().hasPrefix("oc@") }
+            ?? dispatchers.first { $0.name.lowercased().contains("opencode") }
+            ?? dispatchers.first { $0.name.lowercased() == "oc" }
     }
 
     /// Only defer to the text field when it actually has text (so Shift+Arrow

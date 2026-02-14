@@ -1168,24 +1168,35 @@ private struct ChatPane: View {
 
         @ViewBuilder
         private func runStatsView(_ stats: RunStats) -> some View {
-            HStack(spacing: 4) {
-                if let model = stats.model {
-                    Text(model)
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    if let model = stats.model {
+                        Text(model)
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    }
+                    if let tokensIn = stats.tokensIn, let tokensOut = stats.tokensOut {
+                        Text("\(tokensIn)/\(tokensOut)tok")
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    } else if let tokensTotal = stats.tokensTotal {
+                        Text("\(tokensTotal)tok")
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    }
+                    if let cost = stats.costUsd {
+                        Text("$\(cost)")
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    }
+                    if let duration = stats.durationS {
+                        Text("\(duration)s")
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    }
+                    if let tps = runTokensPerSecond(stats) {
+                        Text("\(tps)t/s")
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    }
                 }
-                if let tokensIn = stats.tokensIn, let tokensOut = stats.tokensOut {
-                    Text("\(tokensIn)/\(tokensOut)tok")
-                        .font(.system(size: 9, weight: .regular, design: .monospaced))
-                } else if let tokensTotal = stats.tokensTotal {
-                    Text("\(tokensTotal)tok")
-                        .font(.system(size: 9, weight: .regular, design: .monospaced))
-                }
-                if let cost = stats.costUsd {
-                    Text("$\(cost)")
-                        .font(.system(size: 9, weight: .regular, design: .monospaced))
-                }
-                if let duration = stats.durationS {
-                    Text("\(duration)s")
+
+                if let summary = stats.summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+                    Text(summary)
                         .font(.system(size: 9, weight: .regular, design: .monospaced))
                 }
             }
@@ -1194,6 +1205,22 @@ private struct ChatPane: View {
             .padding(.vertical, 1)
             .background(Color.secondary.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        }
+
+        private func runTokensPerSecond(_ stats: RunStats) -> String? {
+            guard let duration = numericValue(stats.durationS), duration > 0 else { return nil }
+            let tokens = numericValue(stats.tokensOut) ?? numericValue(stats.tokensTotal)
+            guard let tokens, tokens > 0 else { return nil }
+            return String(format: "%.1f", tokens / duration)
+        }
+
+        private func numericValue(_ raw: String?) -> Double? {
+            guard let raw else { return nil }
+            let cleaned = raw
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+            return Double(cleaned)
         }
 
         private var bubbleColor: Color {

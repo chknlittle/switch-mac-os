@@ -19,7 +19,8 @@ public final class SwitchAppModel: ObservableObject {
                 directory = SwitchDirectoryService(
                     xmpp: xmpp,
                     directoryJid: dirJid,
-                    pubSubJid: config.inferredPubSubJidIfMissing()
+                    pubSubJid: config.inferredPubSubJidIfMissing(),
+                    convenienceDispatchers: config.switchConvenienceDispatchers
                 )
             }
 
