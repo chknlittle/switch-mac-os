@@ -1946,10 +1946,34 @@ private struct MarkdownMessage: View {
         guard let ns = try? NSAttributedString(data: data, options: options, documentAttributes: nil) else {
             return nil
         }
-        if let attr = try? AttributedString(ns, including: \.appKit) {
+
+        let trimmed = trimTrailingNewlines(ns)
+        guard !trimmed.string.isEmpty else {
+            return nil
+        }
+
+        if let attr = try? AttributedString(trimmed, including: \.appKit) {
             return Text(attr)
         }
-        return Text(ns.string)
+        return Text(trimmed.string)
+    }
+
+    private func trimTrailingNewlines(_ input: NSAttributedString) -> NSAttributedString {
+        let mutable = NSMutableAttributedString(attributedString: input)
+        let ns = mutable.string as NSString
+        var end = ns.length
+        while end > 0 {
+            let ch = ns.substring(with: NSRange(location: end - 1, length: 1))
+            if ch == "\n" || ch == "\r" {
+                end -= 1
+                continue
+            }
+            break
+        }
+        if end < mutable.length {
+            mutable.deleteCharacters(in: NSRange(location: end, length: mutable.length - end))
+        }
+        return mutable
     }
 
     private func markdownText(_ s: String) -> Text {
