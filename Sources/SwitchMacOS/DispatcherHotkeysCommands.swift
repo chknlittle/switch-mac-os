@@ -38,14 +38,32 @@ final class DispatcherHotkeyMonitor {
         self.model = model
     }
 
+    // Key codes for arrow keys.
+    private static let upArrowKeyCode: UInt16 = 126
+    private static let downArrowKeyCode: UInt16 = 125
+
     func install() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            // Require Cmd held, no other modifiers besides Cmd (allow caps lock)
             let interesting: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
-            guard event.modifierFlags.intersection(interesting) == .command else { return event }
-            guard let slot = Self.slotKeyCode[event.keyCode] else { return event }
-            return self.handleSlot(slot) ? nil : event
+            let held = event.modifierFlags.intersection(interesting)
+
+            // Cmd+1..4: select dispatcher.
+            if held == .command, let slot = Self.slotKeyCode[event.keyCode] {
+                return self.handleSlot(slot) ? nil : event
+            }
+
+            // Shift+Up/Down: navigate sessions (skip when editing text).
+            if held == .shift, !Self.isTextFieldFocused {
+                if event.keyCode == Self.upArrowKeyCode {
+                    return self.handleSessionNav(direction: .up) ? nil : event
+                }
+                if event.keyCode == Self.downArrowKeyCode {
+                    return self.handleSessionNav(direction: .down) ? nil : event
+                }
+            }
+
+            return event
         }
     }
 
@@ -68,6 +86,25 @@ final class DispatcherHotkeyMonitor {
         }
 
         directory.selectDispatcher(directory.dispatchers[index])
+        return true
+    }
+
+    private static var isTextFieldFocused: Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder else { return false }
+        return responder is NSTextView || responder is NSTextField
+    }
+
+    private enum Direction { case up, down }
+
+    /// Navigate sessions with Shift+Up/Down.
+    private func handleSessionNav(direction: Direction) -> Bool {
+        guard let directory = model?.directory else { return false }
+        switch direction {
+        case .up:
+            directory.selectPreviousSession()
+        case .down:
+            directory.selectNextSession()
+        }
         return true
     }
 }

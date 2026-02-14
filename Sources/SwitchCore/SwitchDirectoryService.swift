@@ -150,6 +150,44 @@ public final class SwitchDirectoryService: ObservableObject {
         xmpp.ensureHistoryLoaded(with: item.jid)
     }
 
+    /// Select the next session in display order (visually downward).
+    public func selectNextSession() {
+        let displayOrder = individuals.reversed() as [DirectoryItem]
+        guard !displayOrder.isEmpty else { return }
+        guard let currentJid = selectedSessionJid,
+              let currentIndex = displayOrder.firstIndex(where: { $0.jid == currentJid }) else {
+            // Nothing selected — select the last (bottom-most, most recent).
+            selectIndividual(displayOrder[displayOrder.count - 1])
+            return
+        }
+        let nextIndex = currentIndex + 1
+        guard nextIndex < displayOrder.count else { return }
+        selectIndividual(displayOrder[nextIndex])
+    }
+
+    /// Select the previous session in display order (visually upward).
+    public func selectPreviousSession() {
+        let displayOrder = individuals.reversed() as [DirectoryItem]
+        guard !displayOrder.isEmpty else { return }
+        guard let currentJid = selectedSessionJid,
+              let currentIndex = displayOrder.firstIndex(where: { $0.jid == currentJid }) else {
+            // Nothing selected — select the last (bottom-most, most recent).
+            selectIndividual(displayOrder[displayOrder.count - 1])
+            return
+        }
+        let prevIndex = currentIndex - 1
+        guard prevIndex >= 0 else {
+            // Already at the top — deselect and go back to dispatcher.
+            if let dispatcherJid = selectedDispatcherJid {
+                selectedSessionJid = nil
+                chatTarget = .dispatcher(dispatcherJid)
+                lastSelectedIndividualJid = nil
+            }
+            return
+        }
+        selectIndividual(displayOrder[prevIndex])
+    }
+
     /// Resume an old session by sending a pickup message to the current dispatcher.
     public func resumeSession(_ item: DirectoryItem) {
         guard let dispatcherJid = selectedDispatcherJid else { return }
