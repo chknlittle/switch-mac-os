@@ -53,8 +53,8 @@ final class DispatcherHotkeyMonitor {
                 return self.handleSlot(slot) ? nil : event
             }
 
-            // Shift+Up/Down: navigate sessions (skip when editing text).
-            if held == .shift, !Self.isTextFieldFocused {
+            // Shift+Up/Down: navigate sessions (skip when text field has content).
+            if held == .shift, !Self.isEditingText {
                 if event.keyCode == Self.upArrowKeyCode {
                     return self.handleSessionNav(direction: .up) ? nil : event
                 }
@@ -89,9 +89,11 @@ final class DispatcherHotkeyMonitor {
         return true
     }
 
-    private static var isTextFieldFocused: Bool {
-        guard let responder = NSApp.keyWindow?.firstResponder else { return false }
-        return responder is NSTextView || responder is NSTextField
+    /// Only defer to the text field when it actually has text (so Shift+Arrow
+    /// does text selection). Empty input → navigate sessions instead.
+    private static var isEditingText: Bool {
+        guard let tv = NSApp.keyWindow?.firstResponder as? NSTextView else { return false }
+        return !tv.string.isEmpty
     }
 
     private enum Direction { case up, down }
