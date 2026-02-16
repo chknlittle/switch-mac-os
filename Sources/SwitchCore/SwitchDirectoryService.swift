@@ -62,6 +62,9 @@ public final class SwitchDirectoryService: ObservableObject {
     // Cache sessions per dispatcher so switching back is instant.
     private var sessionsByDispatcher: [String: [DirectoryItem]] = [:]
 
+    // Remember the last selected session per dispatcher.
+    private var selectedSessionByDispatcher: [String: String] = [:]
+
     // Dispatchers that are "direct" (no sessions, e.g. external bridges).
     private var directDispatchers: Set<String> = []
 
@@ -126,12 +129,15 @@ public final class SwitchDirectoryService: ObservableObject {
             return
         }
 
+        let rememberedSessionJid = selectedSessionByDispatcher[item.jid]
+
         // Use cached sessions if we have them; still refresh in the background.
         if let cached = sessionsByDispatcher[item.jid], !cached.isEmpty {
             individuals = sortByRecency(cached)
             dispatcherToSessions[item.jid] = Set(cached.map { $0.jid })
             isLoadingIndividuals = false
             individualsLoadedOnce = true
+            restoreRememberedSession(for: item.jid, rememberedSessionJid: rememberedSessionJid)
         } else {
             individuals = []
             isLoadingIndividuals = true
@@ -151,6 +157,9 @@ public final class SwitchDirectoryService: ObservableObject {
         selectedSessionJid = item.jid
         chatTarget = .individual(item.jid)
         lastSelectedIndividualJid = item.jid
+        if let dispatcherJid = selectedDispatcherJid {
+            selectedSessionByDispatcher[dispatcherJid] = item.jid
+        }
         xmpp.ensureHistoryLoaded(with: item.jid)
     }
 
@@ -457,8 +466,14 @@ public final class SwitchDirectoryService: ObservableObject {
         sessionsByDispatcher[dispatcherJid] = sorted
         dispatcherToSessions[dispatcherJid] = Set(sorted.map { $0.jid })
 
+        let visibleJids = Set(sorted.map { $0.jid })
+        if let rememberedJid = selectedSessionByDispatcher[dispatcherJid], !visibleJids.contains(rememberedJid) {
+            selectedSessionByDispatcher[dispatcherJid] = nil
+        }
+
         if selectedDispatcherJid == dispatcherJid {
             individuals = sorted
+            restoreRememberedSession(for: dispatcherJid)
             suppressResortUntil = Date().addingTimeInterval(1.5)
             scheduleResortAfterSuppression()
             probeRecencyForAllSessions()
@@ -504,6 +519,28 @@ public final class SwitchDirectoryService: ObservableObject {
                 }
             }
         }
+    }
+
+    private func restoreRememberedSession(for dispatcherJid: String, rememberedSessionJid: String? = nil) {
+        guard selectedDispatcherJid == dispatcherJid else { return }
+
+        if let current = selectedSessionJid, individuals.contains(where: { $0.jid == current }) {
+            return
+        }
+
+        let remembered = rememberedSessionJid ?? selectedSessionByDispatcher[dispatcherJid]
+        guard let remembered,
+              let rememberedItem = individuals.first(where: { $0.jid == remembered }) else {
+            selectedSessionJid = nil
+            chatTarget = .dispatcher(dispatcherJid)
+            lastSelectedIndividualJid = nil
+            return
+        }
+
+        selectedSessionJid = rememberedItem.jid
+        chatTarget = .individual(rememberedItem.jid)
+        lastSelectedIndividualJid = rememberedItem.jid
+        xmpp.ensureHistoryLoaded(with: rememberedItem.jid)
     }
 
     // MARK: - PubSub
