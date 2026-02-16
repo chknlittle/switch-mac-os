@@ -100,6 +100,9 @@ private struct DirectoryShellView: View {
             }
             return "Dispatcher: \(jid)"
         case .individual(let jid):
+            if let item = directory.individuals.first(where: { $0.jid == jid }), item.isGroup {
+                return "Group Session: \(jid)"
+            }
             return "Session: \(jid)"
         case .subagent(let jid):
             return "Subagent: \(jid)"
@@ -367,6 +370,7 @@ private struct SidebarList: View {
         SidebarRow(
             title: item.name,
             subtitle: nil,
+            leadingSymbolName: item.isGroup ? "person.2.fill" : nil,
             showAvatar: false,
             avatarData: nil,
             isSelected: directory.selectedSessionJid == item.jid,
@@ -472,6 +476,7 @@ private struct SidebarSectionHeader: View {
 private struct SidebarRow: View {
     let title: String
     let subtitle: String?
+    let leadingSymbolName: String?
     let showAvatar: Bool
     let avatarData: Data?
     let isSelected: Bool
@@ -488,6 +493,12 @@ private struct SidebarRow: View {
         HStack(spacing: 8) {
             if showAvatar {
                 AvatarCircle(imageData: avatarData, fallbackText: title)
+            }
+            if let leadingSymbolName {
+                Image(systemName: leadingSymbolName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14, alignment: .center)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)

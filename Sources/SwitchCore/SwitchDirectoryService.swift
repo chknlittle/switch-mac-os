@@ -478,30 +478,24 @@ public final class SwitchDirectoryService: ObservableObject {
                 switch result {
                 case .success(let items):
                     let mapped = items.items.map { item -> DirectoryItem in
-                        // Dispatcher node format: "N" or "N:direct" (sort position).
-                        // Session node format: nil (active) or "closed".
-                        var isDirect = false
-                        var isClosed = false
-                        var sortOrder = Int.max
-                        if let nodeStr = item.node {
-                            if nodeStr == "closed" {
-                                isClosed = true
-                            } else {
-                                let parts = nodeStr.split(separator: ":", maxSplits: 1)
-                                if let pos = Int(parts[0]) {
-                                    sortOrder = pos
-                                }
-                                if parts.count > 1, parts[1] == "direct" {
-                                    isDirect = true
-                                }
-                            }
-                        }
+                        // Node tokens are colon-delimited and may include:
+                        // - dispatcher sort index (e.g. "0")
+                        // - "direct" for no-session dispatchers
+                        // - "closed" for historical sessions
+                        // - "group"/"muc"/"room" for shared sessions
+                        let nodeTags = nodeTagSet(item.node)
+                        let isDirect = nodeTags.contains("direct")
+                        let isClosed = nodeTags.contains("closed")
+                        let isGroup = nodeTags.contains("group") || nodeTags.contains("muc") || nodeTags.contains("room") || isLikelyGroupJid(item.jid.bareJid.stringValue)
+                        let sortOrder = parseSortOrder(item.node)
+
                         return DirectoryItem(
                             jid: item.jid.bareJid.stringValue,
                             name: item.name,
                             isDirect: isDirect,
                             sortOrder: sortOrder,
-                            isClosed: isClosed
+                            isClosed: isClosed,
+                            isGroup: isGroup
                         )
                     }.sorted { $0.sortOrder < $1.sortOrder }
                     assign(mapped)
@@ -600,9 +594,54 @@ public final class SwitchDirectoryService: ObservableObject {
             guard let jid = child.attribute("jid") else { continue }
             let name = child.attribute("name")
             let isClosed = child.attribute("status") == "closed"
-            items.append(DirectoryItem(jid: jid, name: name, isClosed: isClosed))
+            let kind = child.attribute("kind")?.lowercased()
+            let type = child.attribute("type")?.lowercased()
+            let chat = child.attribute("chat")?.lowercased()
+            let group = child.attribute("group")?.lowercased()
+            let hasRoomAttr = !(child.attribute("room") ?? "").isEmpty
+            let isGroup =
+                kind == "group"
+                || type == "group"
+                || type == "groupchat"
+                || chat == "group"
+                || group == "1"
+                || group == "true"
+                || group == "yes"
+                || hasRoomAttr
+                || isLikelyGroupJid(jid)
+            items.append(DirectoryItem(jid: jid, name: name, isClosed: isClosed, isGroup: isGroup))
         }
         return items
+    }
+
+    private func parseSortOrder(_ node: String?) -> Int {
+        guard let node, !node.isEmpty else { return Int.max }
+        for token in node.split(separator: ":") {
+            if let value = Int(token) {
+                return value
+            }
+        }
+        return Int.max
+    }
+
+    private func nodeTagSet(_ node: String?) -> Set<String> {
+        guard let node, !node.isEmpty else { return [] }
+        var tags: Set<String> = []
+        for token in node.split(separator: ":") {
+            if Int(token) != nil { continue }
+            tags.insert(String(token).lowercased())
+        }
+        return tags
+    }
+
+    private func isLikelyGroupJid(_ jid: String) -> Bool {
+        let bare = jid.split(separator: "/", maxSplits: 1).first.map(String.init) ?? jid
+        let domain = bare.split(separator: "@", maxSplits: 1).last.map(String.init)?.lowercased() ?? ""
+        guard !domain.isEmpty else { return false }
+        return domain.hasPrefix("conference.")
+            || domain.contains(".conference.")
+            || domain.hasPrefix("muc.")
+            || domain.contains(".muc.")
     }
 
     // MARK: - Sorting
