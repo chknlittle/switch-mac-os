@@ -311,7 +311,7 @@ private struct SidebarList: View {
                                 ForEach(directory.dispatchers) { item in
                                     let isSelected = directory.selectedDispatcherJid == item.jid
                                     let isComposing = directory.dispatchersWithComposingSessions.contains(item.jid)
-                                    let unreadCount = directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
+                                    let unreadCount = isComposing ? 0 : directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
 
                                     Button {
                                         directory.selectDispatcher(item)
@@ -367,6 +367,7 @@ private struct SidebarList: View {
 
     @ViewBuilder
     private func sessionRow(_ item: DirectoryItem) -> some View {
+        let isComposing = xmpp.composingJids.contains(item.jid)
         SidebarRow(
             title: item.name,
             subtitle: nil,
@@ -374,8 +375,8 @@ private struct SidebarList: View {
             showAvatar: false,
             avatarData: nil,
             isSelected: directory.selectedSessionJid == item.jid,
-            isComposing: xmpp.composingJids.contains(item.jid),
-            unreadCount: chatStore.unreadCount(for: item.jid),
+            isComposing: isComposing,
+            unreadCount: isComposing ? 0 : chatStore.unreadCount(for: item.jid),
             onCancel: {
                 xmpp.sendMessage(to: item.jid, body: "/cancel")
             },
