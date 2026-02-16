@@ -67,6 +67,7 @@ final class DispatcherHotkeyMonitor {
     private static let upArrowKeyCode: UInt16 = 126
     private static let downArrowKeyCode: UInt16 = 125
     private static let lKeyCode: UInt16 = 37
+    private static let tabKeyCode: UInt16 = 48
 
     func install() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -97,6 +98,11 @@ final class DispatcherHotkeyMonitor {
                 if [Self.upArrowKeyCode, Self.lKeyCode].contains(event.keyCode) {
                     return self.handleOldestWaitingSession() ? nil : event
                 }
+            }
+
+            // Tab: jump to the session waiting longest.
+            if held.isEmpty, event.keyCode == Self.tabKeyCode {
+                return self.handleOldestWaitingSession() ? nil : event
             }
 
             return event
