@@ -483,11 +483,11 @@ public final class SwitchDirectoryService: ObservableObject {
                         // - "direct" for no-session dispatchers
                         // - "closed" for historical sessions
                         // - "group"/"muc"/"room" for shared sessions
-                        let nodeTags = nodeTagSet(item.node)
+                        let nodeTags = self.nodeTagSet(item.node)
                         let isDirect = nodeTags.contains("direct")
                         let isClosed = nodeTags.contains("closed")
-                        let isGroup = nodeTags.contains("group") || nodeTags.contains("muc") || nodeTags.contains("room") || isLikelyGroupJid(item.jid.bareJid.stringValue)
-                        let sortOrder = parseSortOrder(item.node)
+                        let isGroup = nodeTags.contains("group") || nodeTags.contains("muc") || nodeTags.contains("room") || self.isLikelyGroupJid(item.jid.bareJid.stringValue)
+                        let sortOrder = self.parseSortOrder(item.node)
 
                         return DirectoryItem(
                             jid: item.jid.bareJid.stringValue,
