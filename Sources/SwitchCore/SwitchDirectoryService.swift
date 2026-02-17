@@ -50,8 +50,7 @@ public final class SwitchDirectoryService: ObservableObject {
     private var lastSelectedIndividualJid: String? = nil
     private var individualsRefreshToken: UUID? = nil
     private var awaitingNewSession = false
-    private var newSessionPollingDispatcherJid: String? = nil
-    private var newSessionPollToken: UUID? = nil
+    private var awaitNewSessionTimeoutWorkItem: DispatchWorkItem? = nil
     private var knownIndividualJids: Set<String> = []
     private var dispatchersLoaded = false
 
@@ -113,9 +112,7 @@ public final class SwitchDirectoryService: ObservableObject {
             selectedSessionJid = nil
             chatTarget = .dispatcher(item.jid)
             lastSelectedIndividualJid = nil
-            awaitingNewSession = false
-            newSessionPollingDispatcherJid = nil
-            newSessionPollToken = nil
+            clearAwaitingNewSession()
             xmpp.ensureHistoryLoaded(with: item.jid)
             return
         }
@@ -124,9 +121,7 @@ public final class SwitchDirectoryService: ObservableObject {
         selectedSessionJid = nil
         chatTarget = .dispatcher(item.jid)
         lastSelectedIndividualJid = nil
-        awaitingNewSession = false
-        newSessionPollingDispatcherJid = nil
-        newSessionPollToken = nil
+        clearAwaitingNewSession()
 
         // Direct dispatchers (e.g. Acorn) have no sessions — skip loading entirely.
         if item.isDirect {
@@ -165,6 +160,7 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     public func selectIndividual(_ item: DirectoryItem) {
+        clearAwaitingNewSession()
         selectedSessionJid = item.jid
         chatTarget = .individual(item.jid)
         lastSelectedIndividualJid = item.jid
@@ -392,45 +388,26 @@ public final class SwitchDirectoryService: ObservableObject {
 
     private func beginAwaitingNewSession(dispatcherJid: String) {
         knownIndividualJids = Set(individuals.map { $0.jid })
-
-        if awaitingNewSession, newSessionPollingDispatcherJid == dispatcherJid {
-            return
-        }
-
         awaitingNewSession = true
-        newSessionPollingDispatcherJid = dispatcherJid
-        let token = UUID()
-        newSessionPollToken = token
-        pollForNewSession(dispatcherJid: dispatcherJid, token: token)
-    }
 
-    private func pollForNewSession(dispatcherJid: String, token: UUID, remaining: Int = 5) {
-        guard awaitingNewSession else { return }
-        guard newSessionPollToken == token else { return }
-        guard remaining > 0 else {
-            awaitingNewSession = false
-            newSessionPollingDispatcherJid = nil
-            newSessionPollToken = nil
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            guard let self, self.awaitingNewSession else { return }
-            guard self.newSessionPollToken == token else { return }
-            guard self.selectedDispatcherJid == dispatcherJid else {
-                self.awaitingNewSession = false
-                self.newSessionPollingDispatcherJid = nil
-                self.newSessionPollToken = nil
-                return
+        awaitNewSessionTimeoutWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.awaitingNewSession else { return }
+                guard self.selectedDispatcherJid == dispatcherJid else { return }
+                guard case .dispatcher(let targetDispatcherJid) = self.chatTarget, targetDispatcherJid == dispatcherJid else { return }
+                self.clearAwaitingNewSession()
             }
-            self.refreshSessionsForDispatcher(dispatcherJid: dispatcherJid)
-            self.pollForNewSession(dispatcherJid: dispatcherJid, token: token, remaining: remaining - 1)
         }
+        awaitNewSessionTimeoutWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0, execute: work)
     }
 
     private func autoSelectNewSessionIfNeeded() {
         guard awaitingNewSession else { return }
         guard case .dispatcher = chatTarget else {
-            awaitingNewSession = false
+            clearAwaitingNewSession()
             return
         }
         let currentJids = Set(individuals.map { $0.jid })
@@ -439,10 +416,14 @@ public final class SwitchDirectoryService: ObservableObject {
               let newItem = individuals.first(where: { $0.jid == newJid }) else {
             return
         }
-        awaitingNewSession = false
-        newSessionPollingDispatcherJid = nil
-        newSessionPollToken = nil
+        clearAwaitingNewSession()
         selectIndividual(newItem)
+    }
+
+    private func clearAwaitingNewSession() {
+        awaitingNewSession = false
+        awaitNewSessionTimeoutWorkItem?.cancel()
+        awaitNewSessionTimeoutWorkItem = nil
     }
 
     // MARK: - Dispatchers (fetched once, cached permanently)
