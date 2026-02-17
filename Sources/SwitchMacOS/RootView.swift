@@ -888,7 +888,6 @@ private struct ChatPane: View {
                                 ForEach(messages) { msg in
                                     MessageRow(msg: msg, xmpp: xmpp)
                                         .id(msg.id)
-                                        .equatable()
                                 }
                                 Color.clear
                                     .frame(height: 1)
@@ -1096,13 +1095,9 @@ private struct ChatPane: View {
         return parts.joined(separator: "\n\n")
     }
 
-    private struct MessageRow: View, Equatable {
+    private struct MessageRow: View {
         let msg: ChatMessage
         let xmpp: XMPPService
-
-        static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
-            lhs.msg == rhs.msg
-        }
 
         private var isToolMessage: Bool {
             msg.meta?.isToolRelated ?? false
