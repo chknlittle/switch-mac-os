@@ -1,12 +1,11 @@
 import Foundation
-import Combine
 
 @MainActor
-final class ComposerDraftStore: ObservableObject {
+final class ComposerDraftStore {
     private let defaultsKey = "switch.composerDraftsByJid.v1"
     private let defaults: UserDefaults
 
-    @Published private var draftsByJid: [String: String]
+    private var draftsByJid: [String: String]
     private var pendingSave: DispatchWorkItem?
 
     init(defaults: UserDefaults = .standard) {
@@ -27,18 +26,14 @@ final class ComposerDraftStore: ObservableObject {
 
         if text.isEmpty {
             if draftsByJid[key] != nil {
-                var copy = draftsByJid
-                copy.removeValue(forKey: key)
-                draftsByJid = copy
+                draftsByJid.removeValue(forKey: key)
                 scheduleSave()
             }
             return
         }
 
         if draftsByJid[key] != text {
-            var copy = draftsByJid
-            copy[key] = text
-            draftsByJid = copy
+            draftsByJid[key] = text
             scheduleSave()
         }
     }

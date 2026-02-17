@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 import SwitchCore
@@ -27,9 +28,11 @@ struct RootView: View {
 private struct DirectoryShellView: View {
     @ObservedObject var directory: SwitchDirectoryService
     @ObservedObject var xmpp: XMPPService
-    @ObservedObject var chatStore: ChatStore
-    @StateObject private var drafts = ComposerDraftStore()
+    let chatStore: ChatStore
+    @State private var drafts = ComposerDraftStore()
+    @StateObject private var activeThreadMessages = ActiveThreadMessagesModel()
     @State private var pendingImage: PendingImageAttachment? = nil
+    @State private var composerText: String = ""
 
     var body: some View {
         HSplitView {
@@ -40,14 +43,12 @@ private struct DirectoryShellView: View {
                 title: chatTitle,
                 headerPrompt: sessionHeaderPrompt,
                 threadJid: directory.chatTarget?.jid,
-                messages: messagesForActiveChat(),
+                messages: activeThreadMessages.messages,
                 xmpp: xmpp,
-                composerText: composerBinding,
+                composerText: $composerText,
                 pendingImage: $pendingImage,
                 onSend: {
-                    guard let jid = directory.chatTarget?.jid else { return }
-                    let raw = drafts.draft(for: jid)
-                    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
                     if let pending = pendingImage {
                         directory.sendImageAttachment(
                             data: pending.data,
@@ -56,12 +57,12 @@ private struct DirectoryShellView: View {
                             caption: trimmed.isEmpty ? nil : trimmed
                         )
                         pendingImage = nil
-                        drafts.setDraft("", for: jid)
+                        composerText = ""
                         return
                     }
                     guard !trimmed.isEmpty else { return }
                     directory.sendChat(body: trimmed)
-                    drafts.setDraft("", for: jid)
+                    composerText = ""
                 },
                 isEnabled: directory.chatTarget != nil,
                 isTyping: isChatTargetTyping
@@ -69,9 +70,18 @@ private struct DirectoryShellView: View {
         }
         .onAppear {
             chatStore.setActiveThread(directory.chatTarget?.jid)
+            activeThreadMessages.attach(chatStore: chatStore)
+            activeThreadMessages.setThreadJid(directory.chatTarget?.jid)
+            loadDraftForActiveThread()
         }
         .onChange(of: directory.chatTarget?.jid) { newValue in
             chatStore.setActiveThread(newValue)
+            activeThreadMessages.setThreadJid(newValue)
+            loadDraftForActiveThread()
+        }
+        .onChange(of: composerText) { newValue in
+            guard let jid = directory.chatTarget?.jid else { return }
+            drafts.setDraft(newValue, for: jid)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             drafts.flush()
@@ -121,11 +131,6 @@ private struct DirectoryShellView: View {
         return trimmed
     }
 
-    private func messagesForActiveChat() -> [ChatMessage] {
-        guard let target = directory.chatTarget else { return [] }
-        return chatStore.messages(for: target.jid)
-    }
-
     private var statusDotColor: Color {
         switch xmpp.status {
         case .connected: return .green
@@ -139,17 +144,50 @@ private struct DirectoryShellView: View {
         return xmpp.composingJids.contains(target.jid)
     }
 
-    private var composerBinding: Binding<String> {
-        Binding(
-            get: {
-                guard let jid = directory.chatTarget?.jid else { return "" }
-                return drafts.draft(for: jid)
-            },
-            set: { newValue in
-                guard let jid = directory.chatTarget?.jid else { return }
-                drafts.setDraft(newValue, for: jid)
+    private func loadDraftForActiveThread() {
+        guard let jid = directory.chatTarget?.jid else {
+            composerText = ""
+            return
+        }
+        composerText = drafts.draft(for: jid)
+    }
+}
+
+@MainActor
+private final class ActiveThreadMessagesModel: ObservableObject {
+    @Published private(set) var messages: [ChatMessage] = []
+
+    private weak var chatStore: ChatStore?
+    private var threadJid: String?
+    private var cancellables: Set<AnyCancellable> = []
+
+    func attach(chatStore: ChatStore) {
+        if self.chatStore === chatStore {
+            return
+        }
+
+        self.chatStore = chatStore
+        cancellables.removeAll()
+
+        chatStore.threadMessagesUpdated
+            .sink { [weak self] updatedThreadJid in
+                guard let self else { return }
+                guard updatedThreadJid == self.threadJid else { return }
+                guard let store = self.chatStore else { return }
+                self.messages = store.messages(for: updatedThreadJid)
             }
-        )
+            .store(in: &cancellables)
+
+        setThreadJid(threadJid)
+    }
+
+    func setThreadJid(_ jid: String?) {
+        threadJid = jid
+        guard let store = chatStore, let jid else {
+            messages = []
+            return
+        }
+        messages = store.messages(for: jid)
     }
 }
 
@@ -1129,6 +1167,7 @@ private struct ChatPane: View {
                         toolMessageContent
                     } else {
                         MarkdownMessage(content: msg.body, xhtmlBody: msg.xhtmlBody)
+                            .equatable()
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
                             .background(bubbleColor)
@@ -2001,7 +2040,7 @@ private struct ComposerTextView: NSViewRepresentable {
     }
 }
 
-private struct MarkdownMessage: View {
+private struct MarkdownMessage: View, Equatable {
     let content: String
     let xhtmlBody: String?
 
@@ -2025,7 +2064,7 @@ private struct MarkdownMessage: View {
             switch block.kind {
             case .markdown(let s):
                 combined = combined + markdownText(s)
-            case .code(let s, _):
+            case .code(let s):
                 combined = combined + codeBlockText(s)
             }
             if i != blocks.indices.last {
@@ -2356,9 +2395,8 @@ private struct MarkdownMessage: View {
     private struct MarkdownBlock {
         enum Kind {
             case markdown(String)
-            case code(String, lang: String?)
+            case code(String)
         }
-        let id: String
         let kind: Kind
     }
 
@@ -2366,7 +2404,6 @@ private struct MarkdownMessage: View {
         var blocks: [MarkdownBlock] = []
         var current: [String] = []
         var inCode = false
-        var codeLang: String? = nil
 
         func flushMarkdown() {
             let s = current.joined(separator: "\n")
@@ -2374,14 +2411,13 @@ private struct MarkdownMessage: View {
             if s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return
             }
-            blocks.append(MarkdownBlock(id: UUID().uuidString, kind: .markdown(s)))
+            blocks.append(MarkdownBlock(kind: .markdown(s)))
         }
 
         func flushCode() {
             let s = current.joined(separator: "\n")
             current.removeAll(keepingCapacity: true)
-            blocks.append(MarkdownBlock(id: UUID().uuidString, kind: .code(s, lang: codeLang)))
-            codeLang = nil
+            blocks.append(MarkdownBlock(kind: .code(s)))
         }
 
         for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
@@ -2392,8 +2428,6 @@ private struct MarkdownMessage: View {
                 } else {
                     flushMarkdown()
                     inCode = true
-                    let lang = line.dropFirst(3).trimmingCharacters(in: .whitespacesAndNewlines)
-                    codeLang = lang.isEmpty ? nil : lang
                 }
                 continue
             }
@@ -2407,7 +2441,7 @@ private struct MarkdownMessage: View {
         }
 
         if blocks.isEmpty {
-            blocks.append(MarkdownBlock(id: UUID().uuidString, kind: .markdown(text)))
+            blocks.append(MarkdownBlock(kind: .markdown(text)))
         }
 
         return blocks

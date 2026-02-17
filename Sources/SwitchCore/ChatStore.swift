@@ -134,6 +134,7 @@ public final class ChatStore: ObservableObject {
     /// don't want to store full message bodies (e.g. MAM recency probes).
     @Published public private(set) var lastActivityByThread: [String: Date] = [:]
     public let activityUpdatedThread = PassthroughSubject<String, Never>()
+    public let threadMessagesUpdated = PassthroughSubject<String, Never>()
 
     @Published public private(set) var unreadByThread: [String: Int] = [:]
     @Published public private(set) var activeThreadJid: String? = nil
@@ -237,6 +238,7 @@ public final class ChatStore: ObservableObject {
         knownIds.insert(message.id)
         messageIdsByThread[message.threadJid] = knownIds
         threads[message.threadJid] = arr
+        threadMessagesUpdated.send(message.threadJid)
         noteActivity(threadJid: message.threadJid, timestamp: message.timestamp)
         return true
     }
