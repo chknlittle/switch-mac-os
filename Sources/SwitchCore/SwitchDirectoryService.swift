@@ -50,6 +50,8 @@ public final class SwitchDirectoryService: ObservableObject {
     private var lastSelectedIndividualJid: String? = nil
     private var individualsRefreshToken: UUID? = nil
     private var awaitingNewSession = false
+    private var newSessionPollingDispatcherJid: String? = nil
+    private var newSessionPollToken: UUID? = nil
     private var knownIndividualJids: Set<String> = []
     private var dispatchersLoaded = false
 
@@ -112,6 +114,8 @@ public final class SwitchDirectoryService: ObservableObject {
             chatTarget = .dispatcher(item.jid)
             lastSelectedIndividualJid = nil
             awaitingNewSession = false
+            newSessionPollingDispatcherJid = nil
+            newSessionPollToken = nil
             xmpp.ensureHistoryLoaded(with: item.jid)
             return
         }
@@ -121,6 +125,8 @@ public final class SwitchDirectoryService: ObservableObject {
         chatTarget = .dispatcher(item.jid)
         lastSelectedIndividualJid = nil
         awaitingNewSession = false
+        newSessionPollingDispatcherJid = nil
+        newSessionPollToken = nil
 
         // Direct dispatchers (e.g. Acorn) have no sessions — skip loading entirely.
         if item.isDirect {
@@ -220,8 +226,7 @@ public final class SwitchDirectoryService: ObservableObject {
 
         // Poll for the new session to appear.
         knownIndividualJids = Set(individuals.map { $0.jid })
-        awaitingNewSession = true
-        pollForNewSession(dispatcherJid: dispatcherJid)
+        beginAwaitingNewSession(dispatcherJid: dispatcherJid)
     }
 
     public func sendChat(body: String) {
@@ -239,9 +244,7 @@ public final class SwitchDirectoryService: ObservableObject {
 
         if case .dispatcher(let dispatcherJid) = target {
             if selectedDispatcherJid == dispatcherJid, !directDispatchers.contains(dispatcherJid) {
-                knownIndividualJids = Set(individuals.map { $0.jid })
-                awaitingNewSession = true
-                pollForNewSession(dispatcherJid: dispatcherJid)
+                beginAwaitingNewSession(dispatcherJid: dispatcherJid)
             }
         }
     }
@@ -259,9 +262,7 @@ public final class SwitchDirectoryService: ObservableObject {
 
         if case .dispatcher(let dispatcherJid) = target {
             if selectedDispatcherJid == dispatcherJid, !directDispatchers.contains(dispatcherJid) {
-                knownIndividualJids = Set(individuals.map { $0.jid })
-                awaitingNewSession = true
-                pollForNewSession(dispatcherJid: dispatcherJid)
+                beginAwaitingNewSession(dispatcherJid: dispatcherJid)
             }
         }
     }
@@ -389,16 +390,40 @@ public final class SwitchDirectoryService: ObservableObject {
         return (bestJid, dispatcherForSession(bestJid))
     }
 
-    private func pollForNewSession(dispatcherJid: String, remaining: Int = 5) {
-        guard remaining > 0, awaitingNewSession else { return }
+    private func beginAwaitingNewSession(dispatcherJid: String) {
+        knownIndividualJids = Set(individuals.map { $0.jid })
+
+        if awaitingNewSession, newSessionPollingDispatcherJid == dispatcherJid {
+            return
+        }
+
+        awaitingNewSession = true
+        newSessionPollingDispatcherJid = dispatcherJid
+        let token = UUID()
+        newSessionPollToken = token
+        pollForNewSession(dispatcherJid: dispatcherJid, token: token)
+    }
+
+    private func pollForNewSession(dispatcherJid: String, token: UUID, remaining: Int = 5) {
+        guard awaitingNewSession else { return }
+        guard newSessionPollToken == token else { return }
+        guard remaining > 0 else {
+            awaitingNewSession = false
+            newSessionPollingDispatcherJid = nil
+            newSessionPollToken = nil
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self, self.awaitingNewSession else { return }
+            guard self.newSessionPollToken == token else { return }
             guard self.selectedDispatcherJid == dispatcherJid else {
                 self.awaitingNewSession = false
+                self.newSessionPollingDispatcherJid = nil
+                self.newSessionPollToken = nil
                 return
             }
             self.refreshSessionsForDispatcher(dispatcherJid: dispatcherJid)
-            self.pollForNewSession(dispatcherJid: dispatcherJid, remaining: remaining - 1)
+            self.pollForNewSession(dispatcherJid: dispatcherJid, token: token, remaining: remaining - 1)
         }
     }
 
@@ -415,6 +440,8 @@ public final class SwitchDirectoryService: ObservableObject {
             return
         }
         awaitingNewSession = false
+        newSessionPollingDispatcherJid = nil
+        newSessionPollToken = nil
         selectIndividual(newItem)
     }
 
@@ -754,9 +781,16 @@ public final class SwitchDirectoryService: ObservableObject {
         let active = items.filter { !$0.isClosed }
         let closed = items.filter { $0.isClosed }
         let chatStore = xmpp.chatStore
+        var recencyByJid: [String: Date] = [:]
+        recencyByJid.reserveCapacity(active.count)
+        for item in active {
+            recencyByJid[item.jid] = chatStore.lastActivityByThread[item.jid]
+                ?? chatStore.messages(for: item.jid).last?.timestamp
+                ?? .distantPast
+        }
         let sortedActive = active.sorted { a, b in
-            let aTime = chatStore.lastActivityByThread[a.jid] ?? chatStore.messages(for: a.jid).last?.timestamp ?? .distantPast
-            let bTime = chatStore.lastActivityByThread[b.jid] ?? chatStore.messages(for: b.jid).last?.timestamp ?? .distantPast
+            let aTime = recencyByJid[a.jid] ?? .distantPast
+            let bTime = recencyByJid[b.jid] ?? .distantPast
             if aTime != bTime {
                 return aTime > bTime
             }
