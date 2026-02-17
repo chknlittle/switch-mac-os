@@ -65,6 +65,9 @@ public final class SwitchDirectoryService: ObservableObject {
     // Remember the last selected session per dispatcher.
     private var selectedSessionByDispatcher: [String: String] = [:]
 
+    // Only restore remembered selection once per explicit dispatcher switch.
+    private var pendingRestoreDispatcherJid: String? = nil
+
     // Dispatchers that are "direct" (no sessions, e.g. external bridges).
     private var directDispatchers: Set<String> = []
 
@@ -130,6 +133,7 @@ public final class SwitchDirectoryService: ObservableObject {
         }
 
         let rememberedSessionJid = selectedSessionByDispatcher[item.jid]
+        pendingRestoreDispatcherJid = rememberedSessionJid == nil ? nil : item.jid
 
         // Use cached sessions if we have them; still refresh in the background.
         if let cached = sessionsByDispatcher[item.jid], !cached.isEmpty {
@@ -138,6 +142,7 @@ public final class SwitchDirectoryService: ObservableObject {
             isLoadingIndividuals = false
             individualsLoadedOnce = true
             restoreRememberedSession(for: item.jid, rememberedSessionJid: rememberedSessionJid)
+            pendingRestoreDispatcherJid = nil
         } else {
             individuals = []
             isLoadingIndividuals = true
@@ -473,7 +478,10 @@ public final class SwitchDirectoryService: ObservableObject {
 
         if selectedDispatcherJid == dispatcherJid {
             individuals = sorted
-            restoreRememberedSession(for: dispatcherJid)
+            if pendingRestoreDispatcherJid == dispatcherJid {
+                restoreRememberedSession(for: dispatcherJid)
+                pendingRestoreDispatcherJid = nil
+            }
             suppressResortUntil = Date().addingTimeInterval(1.5)
             scheduleResortAfterSuppression()
             probeRecencyForAllSessions()

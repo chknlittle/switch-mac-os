@@ -100,8 +100,8 @@ final class DispatcherHotkeyMonitor {
                 }
             }
 
-            // Tab: jump to the session waiting longest.
-            if held.isEmpty, event.keyCode == Self.tabKeyCode {
+            // Tab: jump to the session waiting longest (only outside text editing).
+            if held.isEmpty, event.keyCode == Self.tabKeyCode, !Self.isEditingText {
                 return self.handleOldestWaitingSession() ? nil : event
             }
 
