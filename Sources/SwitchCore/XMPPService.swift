@@ -11,6 +11,7 @@ public let switchMetaNamespace = "urn:switch:message-meta"
 private let oobNamespace = "jabber:x:oob"
 private let xhtmlImNamespace = "http://jabber.org/protocol/xhtml-im"
 private let xhtmlNamespace = "http://www.w3.org/1999/xhtml"
+private let sidNamespace = "urn:xmpp:sid:0"
 
 private func localName(of raw: String) -> String {
     // Handles:
@@ -223,6 +224,35 @@ public func parseXHTMLBody(from element: Element) -> String? {
       </body>
     </html>
     """
+}
+
+private func parseStableMessageId(from element: Element) -> String? {
+    var stanzaId: String?
+    var originId: String?
+
+    for child in element.children {
+        let lname = localName(of: child.name).lowercased()
+        guard lname == "stanza-id" || lname == "origin-id" else { continue }
+
+        // XEP-0359 ids are expected in urn:xmpp:sid:0. Be tolerant of
+        // parser/namespace variations and still read known element names.
+        let ns = child.xmlns ?? ""
+        if !ns.isEmpty && ns != sidNamespace {
+            continue
+        }
+
+        guard let id = child.attribute("id")?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
+            continue
+        }
+
+        if lname == "stanza-id" {
+            stanzaId = id
+        } else {
+            originId = id
+        }
+    }
+
+    return stanzaId ?? originId
 }
 
 private func renderXHTMLElementChildren(_ parent: Element) -> String {
@@ -775,9 +805,10 @@ public final class XMPPService: ObservableObject {
                 guard let body = received.message.body else { return }
                 // Receiving a message with body means they're done typing
                 self.composingJids.remove(from)
+                let stableId = parseStableMessageId(from: received.message.element) ?? received.message.id
                 let meta = parseMessageMeta(from: received.message.element)
                 let xhtmlBody = parseXHTMLBody(from: received.message.element)
-                self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, id: received.message.id, timestamp: received.message.delay?.stamp ?? Date(), meta: meta)
+                self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, id: stableId, timestamp: received.message.delay?.stamp ?? Date(), meta: meta)
             }
             .store(in: &cancellables)
 
@@ -804,7 +835,9 @@ public final class XMPPService: ObservableObject {
                 let localBare = self.client.userBareJid
                 let fromBare = archived.message.from?.bareJid
                 let direction: ChatMessage.Direction = (fromBare == localBare) ? .outgoing : .incoming
-                let id = "mam:\(archived.messageId)"
+                let id = parseStableMessageId(from: archived.message.element)
+                    ?? archived.message.id
+                    ?? "mam:\(archived.messageId)"
                 let meta = parseMessageMeta(from: archived.message.element)
                 let xhtmlBody = parseXHTMLBody(from: archived.message.element)
 
