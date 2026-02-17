@@ -17,13 +17,13 @@ public final class SwitchDirectoryService: ObservableObject {
 
     /// Tracks which sessions belong to which dispatcher (dispatcher JID -> session JIDs)
     private var dispatcherToSessions: [String: Set<String>] = [:]
+    private var sessionToDispatcher: [String: String] = [:]
 
     /// Returns set of dispatcher JIDs that have at least one composing session
     public var dispatchersWithComposingSessions: Set<String> {
         var result: Set<String> = []
-        let composing = xmpp.composingJids
-        for (dispatcherJid, sessionJids) in dispatcherToSessions {
-            if !sessionJids.isDisjoint(with: composing) {
+        for sessionJid in xmpp.composingJids {
+            if let dispatcherJid = sessionToDispatcher[sessionJid] {
                 result.insert(dispatcherJid)
             }
         }
@@ -66,11 +66,17 @@ public final class SwitchDirectoryService: ObservableObject {
     // Remember the last selected session per dispatcher.
     private var selectedSessionByDispatcher: [String: String] = [:]
 
+    // Track known sessions per dispatcher to avoid repeated expensive work on unchanged lists.
+    private var knownSessionJidsByDispatcher: [String: Set<String>] = [:]
+
     // Only restore remembered selection once per explicit dispatcher switch.
     private var pendingRestoreDispatcherJid: String? = nil
 
     // Dispatchers that are "direct" (no sessions, e.g. external bridges).
     private var directDispatchers: Set<String> = []
+
+    private let historyPrefetchLimit: Int
+    private let recencyProbeLimit: Int
 
     public init(
         xmpp: XMPPService,
@@ -89,6 +95,8 @@ public final class SwitchDirectoryService: ObservableObject {
         self.pubSubBareJid = pubSubJid.map { JID($0).bareJid }
         self.nodes = nodes
         self.convenienceDispatchers = convenienceDispatchers
+        self.historyPrefetchLimit = Self.envInt("SWITCH_PREFETCH_HISTORY_THREADS", defaultValue: 0, min: 0, max: 50)
+        self.recencyProbeLimit = Self.envInt("SWITCH_RECENCY_PROBE_THREADS", defaultValue: 5000, min: 0, max: 5000)
         bindPubSubRefresh()
     }
 
@@ -412,8 +420,7 @@ public final class SwitchDirectoryService: ObservableObject {
         }
         let currentJids = Set(individuals.map { $0.jid })
         let newJids = currentJids.subtracting(knownIndividualJids)
-        guard let newJid = newJids.first,
-              let newItem = individuals.first(where: { $0.jid == newJid }) else {
+        guard let newItem = individuals.first(where: { newJids.contains($0.jid) }) else {
             return
         }
         clearAwaitingNewSession()
@@ -477,23 +484,42 @@ public final class SwitchDirectoryService: ObservableObject {
     private func applySessionsList(_ items: [DirectoryItem], forDispatcher dispatcherJid: String) {
         let sorted = sortByRecency(items)
         sessionsByDispatcher[dispatcherJid] = sorted
-        dispatcherToSessions[dispatcherJid] = Set(sorted.map { $0.jid })
-
         let visibleJids = Set(sorted.map { $0.jid })
+        dispatcherToSessions[dispatcherJid] = visibleJids
+
+        let previousJids = knownSessionJidsByDispatcher[dispatcherJid] ?? []
+        knownSessionJidsByDispatcher[dispatcherJid] = visibleJids
+        let newlySeenJids = visibleJids.subtracting(previousJids)
+
+        for oldJid in previousJids where !visibleJids.contains(oldJid) {
+            if sessionToDispatcher[oldJid] == dispatcherJid {
+                sessionToDispatcher.removeValue(forKey: oldJid)
+            }
+        }
+        for jid in visibleJids {
+            sessionToDispatcher[jid] = dispatcherJid
+        }
+
         if let rememberedJid = selectedSessionByDispatcher[dispatcherJid], !visibleJids.contains(rememberedJid) {
             selectedSessionByDispatcher[dispatcherJid] = nil
         }
 
         if selectedDispatcherJid == dispatcherJid {
-            individuals = sorted
+            let didChangeIndividuals = individuals != sorted
+            if didChangeIndividuals {
+                individuals = sorted
+            }
             if pendingRestoreDispatcherJid == dispatcherJid {
                 restoreRememberedSession(for: dispatcherJid)
                 pendingRestoreDispatcherJid = nil
             }
-            suppressResortUntil = Date().addingTimeInterval(1.5)
-            scheduleResortAfterSuppression()
-            probeRecencyForAllSessions()
-            loadHistoryForAllSessions()
+            if didChangeIndividuals {
+                suppressResortUntil = Date().addingTimeInterval(1.5)
+                scheduleResortAfterSuppression()
+            }
+            let newItems = sorted.filter { newlySeenJids.contains($0.jid) }
+            probeRecencyForSessions(newItems)
+            loadHistoryForSessions(newItems)
             autoSelectNewSessionIfNeeded()
             isLoadingIndividuals = false
             individualsLoadedOnce = true
@@ -619,18 +645,13 @@ public final class SwitchDirectoryService: ObservableObject {
             .store(in: &cancellables)
 
         // Re-sort sessions and dispatchers when new messages arrive
-        xmpp.chatStore.$threads
+        // Re-sort only when activity changed for a currently-visible session.
+        xmpp.chatStore.activityUpdatedThread
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.scheduleResort()
-            }
-            .store(in: &cancellables)
-
-        // Re-sort when we learn timestamps without storing message bodies.
-        xmpp.chatStore.$lastActivityByThread
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.scheduleResort()
+            .sink { [weak self] threadJid in
+                guard let self else { return }
+                guard self.individuals.contains(where: { $0.jid == threadJid }) else { return }
+                self.scheduleResort()
             }
             .store(in: &cancellables)
     }
@@ -647,24 +668,31 @@ public final class SwitchDirectoryService: ObservableObject {
             guard let jid = child.attribute("jid") else { continue }
             let name = child.attribute("name")
             let isClosed = child.attribute("status") == "closed"
-            let kind = child.attribute("kind")?.lowercased()
-            let type = child.attribute("type")?.lowercased()
-            let chat = child.attribute("chat")?.lowercased()
-            let group = child.attribute("group")?.lowercased()
-            let hasRoomAttr = !(child.attribute("room") ?? "").isEmpty
-            let isGroup =
-                kind == "group"
-                || type == "group"
-                || type == "groupchat"
-                || chat == "group"
-                || group == "1"
-                || group == "true"
-                || group == "yes"
-                || hasRoomAttr
-                || isLikelyGroupJid(jid)
+            let isGroup = payloadSessionIsGroup(child, jid: jid)
             items.append(DirectoryItem(jid: jid, name: name, isClosed: isClosed, isGroup: isGroup))
         }
         return items
+    }
+
+    private func payloadSessionIsGroup(_ node: Element, jid: String) -> Bool {
+        let kind = node.attribute("kind")?.lowercased()
+        let type = node.attribute("type")?.lowercased()
+        let chat = node.attribute("chat")?.lowercased()
+        let hasRoomAttr = !(node.attribute("room") ?? "").isEmpty
+        return kind == "group"
+            || type == "group"
+            || type == "groupchat"
+            || chat == "group"
+            || boolAttribute(node.attribute("group"))
+            || hasRoomAttr
+            || isLikelyGroupJid(jid)
+    }
+
+    private func boolAttribute(_ value: String?) -> Bool {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !normalized.isEmpty else {
+            return false
+        }
+        return normalized == "1" || normalized == "true" || normalized == "yes"
     }
 
     private func parseSortOrder(_ node: String?) -> Int {
@@ -695,6 +723,12 @@ public final class SwitchDirectoryService: ObservableObject {
             || domain.contains(".conference.")
             || domain.hasPrefix("muc.")
             || domain.contains(".muc.")
+    }
+
+    private static func envInt(_ key: String, defaultValue: Int, min: Int, max: Int) -> Int {
+        let raw = ProcessInfo.processInfo.environment[key] ?? String(defaultValue)
+        let parsed = Int(raw) ?? defaultValue
+        return Swift.max(min, Swift.min(parsed, max))
     }
 
     // MARK: - Sorting
@@ -732,27 +766,26 @@ public final class SwitchDirectoryService: ObservableObject {
 
     private func resortIndividualsByRecency() {
         guard !individuals.isEmpty else { return }
-        individuals = sortByRecency(individuals)
+        let sorted = sortByRecency(individuals)
+        if sorted != individuals {
+            individuals = sorted
+        }
     }
 
-    private func loadHistoryForAllSessions() {
-        let raw = ProcessInfo.processInfo.environment["SWITCH_PREFETCH_HISTORY_THREADS"] ?? "0"
-        let parsed = Int(raw) ?? 0
-        let limit = max(0, min(parsed, 50))
-        guard limit > 0 else { return }
+    private func loadHistoryForSessions(_ items: [DirectoryItem]) {
+        guard historyPrefetchLimit > 0 else { return }
+        guard !items.isEmpty else { return }
 
-        for item in individuals.prefix(limit) {
+        for item in items.prefix(historyPrefetchLimit) {
             xmpp.ensureHistoryLoaded(with: item.jid)
         }
     }
 
-    private func probeRecencyForAllSessions() {
-        let raw = ProcessInfo.processInfo.environment["SWITCH_RECENCY_PROBE_THREADS"] ?? "5000"
-        let parsed = Int(raw) ?? 5000
-        let limit = max(0, min(parsed, 5000))
-        guard limit > 0 else { return }
+    private func probeRecencyForSessions(_ items: [DirectoryItem]) {
+        guard recencyProbeLimit > 0 else { return }
+        guard !items.isEmpty else { return }
 
-        for item in individuals.filter({ !$0.isClosed }).prefix(limit) {
+        for item in items.filter({ !$0.isClosed }).prefix(recencyProbeLimit) {
             xmpp.ensureRecencyProbed(with: item.jid)
         }
     }
@@ -765,9 +798,7 @@ public final class SwitchDirectoryService: ObservableObject {
         var recencyByJid: [String: Date] = [:]
         recencyByJid.reserveCapacity(active.count)
         for item in active {
-            recencyByJid[item.jid] = chatStore.lastActivityByThread[item.jid]
-                ?? chatStore.messages(for: item.jid).last?.timestamp
-                ?? .distantPast
+            recencyByJid[item.jid] = chatStore.lastActivityByThread[item.jid] ?? .distantPast
         }
         let sortedActive = active.sorted { a, b in
             let aTime = recencyByJid[a.jid] ?? .distantPast

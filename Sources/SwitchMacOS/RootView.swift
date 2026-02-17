@@ -302,6 +302,8 @@ private struct SidebarList: View {
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
+                            let composingDispatchers = directory.dispatchersWithComposingSessions
+                            let unreadByDispatcher = dispatcherUnreadCounts()
                             if directory.dispatchers.isEmpty {
                                 Text("Loading dispatchers...")
                                     .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -310,8 +312,8 @@ private struct SidebarList: View {
                             } else {
                                 ForEach(directory.dispatchers) { item in
                                     let isSelected = directory.selectedDispatcherJid == item.jid
-                                    let isComposing = directory.dispatchersWithComposingSessions.contains(item.jid)
-                                    let unreadCount = isComposing ? 0 : directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
+                                    let isComposing = composingDispatchers.contains(item.jid)
+                                    let unreadCount = isComposing ? 0 : (unreadByDispatcher[item.jid] ?? 0)
 
                                     Button {
                                         directory.selectDispatcher(item)
@@ -392,6 +394,15 @@ private struct SidebarList: View {
         }
         .id(item.jid)
         .padding(.horizontal, 10)
+    }
+
+    private func dispatcherUnreadCounts() -> [String: Int] {
+        var counts: [String: Int] = [:]
+        counts.reserveCapacity(directory.dispatchers.count)
+        for item in directory.dispatchers {
+            counts[item.jid] = directory.unreadCountForDispatcher(item.jid, unreadByThread: chatStore.unreadByThread)
+        }
+        return counts
     }
 }
 
@@ -877,6 +888,7 @@ private struct ChatPane: View {
                                 ForEach(messages) { msg in
                                     MessageRow(msg: msg, xmpp: xmpp)
                                         .id(msg.id)
+                                        .equatable()
                                 }
                                 Color.clear
                                     .frame(height: 1)
@@ -1084,9 +1096,13 @@ private struct ChatPane: View {
         return parts.joined(separator: "\n\n")
     }
 
-    private struct MessageRow: View {
+    private struct MessageRow: View, Equatable {
         let msg: ChatMessage
         let xmpp: XMPPService
+
+        static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
+            lhs.msg == rhs.msg
+        }
 
         private var isToolMessage: Bool {
             msg.meta?.isToolRelated ?? false
@@ -1289,23 +1305,37 @@ private struct ChatPane: View {
             }
         }
 
+        private static let timeFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "h:mm a"
+            return formatter
+        }()
+
+        private static let weekdayTimeFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "EEEE h:mm a"
+            return formatter
+        }()
+
+        private static let fullFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "MMM d, h:mm a"
+            return formatter
+        }()
+
         private func formatTimestamp(_ date: Date) -> String {
             let calendar = Calendar.current
-            let formatter = DateFormatter()
 
             if calendar.isDateInToday(date) {
-                formatter.dateFormat = "h:mm a"
-                return formatter.string(from: date)
-            } else if calendar.isDateInYesterday(date) {
-                formatter.dateFormat = "h:mm a"
-                return "Yesterday \(formatter.string(from: date))"
-            } else if calendar.isDate(date, equalTo: Date(), toGranularity: .weekOfYear) {
-                formatter.dateFormat = "EEEE h:mm a"
-                return formatter.string(from: date)
-            } else {
-                formatter.dateFormat = "MMM d, h:mm a"
-                return formatter.string(from: date)
+                return Self.timeFormatter.string(from: date)
             }
+            if calendar.isDateInYesterday(date) {
+                return "Yesterday \(Self.timeFormatter.string(from: date))"
+            }
+            if calendar.isDate(date, equalTo: Date(), toGranularity: .weekOfYear) {
+                return Self.weekdayTimeFormatter.string(from: date)
+            }
+            return Self.fullFormatter.string(from: date)
         }
     }
 

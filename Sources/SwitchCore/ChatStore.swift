@@ -126,12 +126,14 @@ public struct ChatMessage: Identifiable, Hashable, Sendable {
 @MainActor
 public final class ChatStore: ObservableObject {
     @Published public private(set) var threads: [String: [ChatMessage]] = [:]
+    private var messageIdsByThread: [String: Set<String>] = [:]
 
     /// Best-effort last-activity timestamps per thread.
     ///
     /// This is intentionally independent of `threads` so we can track recency even when we
     /// don't want to store full message bodies (e.g. MAM recency probes).
     @Published public private(set) var lastActivityByThread: [String: Date] = [:]
+    public let activityUpdatedThread = PassthroughSubject<String, Never>()
 
     @Published public private(set) var unreadByThread: [String: Int] = [:]
     @Published public private(set) var activeThreadJid: String? = nil
@@ -146,9 +148,11 @@ public final class ChatStore: ObservableObject {
         if let existing {
             if timestamp > existing {
                 lastActivityByThread[threadJid] = timestamp
+                activityUpdatedThread.send(threadJid)
             }
         } else {
             lastActivityByThread[threadJid] = timestamp
+            activityUpdatedThread.send(threadJid)
         }
     }
 
@@ -214,13 +218,43 @@ public final class ChatStore: ObservableObject {
     @discardableResult
     private func appendIfMissing(_ message: ChatMessage) -> Bool {
         var arr = threads[message.threadJid] ?? []
-        if arr.contains(where: { $0.id == message.id }) {
+        var knownIds = messageIdsByThread[message.threadJid] ?? []
+        if knownIds.contains(message.id) {
             return false
         }
-        arr.append(message)
-        arr.sort { $0.timestamp < $1.timestamp }
+
+        if let last = arr.last {
+            if last.timestamp <= message.timestamp {
+                arr.append(message)
+            } else {
+                let idx = insertionIndex(for: message, in: arr)
+                arr.insert(message, at: idx)
+            }
+        } else {
+            arr.append(message)
+        }
+
+        knownIds.insert(message.id)
+        messageIdsByThread[message.threadJid] = knownIds
         threads[message.threadJid] = arr
         noteActivity(threadJid: message.threadJid, timestamp: message.timestamp)
         return true
+    }
+
+    private func insertionIndex(for message: ChatMessage, in messages: [ChatMessage]) -> Int {
+        var low = 0
+        var high = messages.count
+
+        while low < high {
+            let mid = (low + high) / 2
+            let candidate = messages[mid]
+            if candidate.timestamp <= message.timestamp {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+
+        return low
     }
 }
