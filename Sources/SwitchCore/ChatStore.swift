@@ -108,6 +108,13 @@ public struct MessageReplyReference: Hashable, Sendable {
     }
 }
 
+public enum MessageEncryptionState: String, Hashable, Sendable {
+    case cleartext
+    case encrypted
+    case decrypted
+    case decryptionFailed
+}
+
 public struct ChatMessage: Identifiable, Hashable, Sendable {
     public enum Direction: String, Sendable {
         case incoming
@@ -120,16 +127,18 @@ public struct ChatMessage: Identifiable, Hashable, Sendable {
     public let body: String
     public let xhtmlBody: String?
     public let replyTo: MessageReplyReference?
+    public let encryption: MessageEncryptionState
     public let timestamp: Date
     public let meta: MessageMeta?
 
-    public init(id: String, threadJid: String, direction: Direction, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, timestamp: Date, meta: MessageMeta? = nil) {
+    public init(id: String, threadJid: String, direction: Direction, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, encryption: MessageEncryptionState = .cleartext, timestamp: Date, meta: MessageMeta? = nil) {
         self.id = id
         self.threadJid = threadJid
         self.direction = direction
         self.body = body
         self.xhtmlBody = xhtmlBody
         self.replyTo = replyTo
+        self.encryption = encryption
         self.timestamp = timestamp
         self.meta = meta
     }
@@ -190,7 +199,7 @@ public final class ChatStore: ObservableObject {
         threads[threadJid] ?? []
     }
 
-    public func appendIncoming(threadJid: String, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
+    public func appendIncoming(threadJid: String, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, encryption: MessageEncryptionState = .cleartext, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
         let msg = ChatMessage(
             id: id ?? UUID().uuidString,
             threadJid: threadJid,
@@ -198,6 +207,7 @@ public final class ChatStore: ObservableObject {
             body: body,
             xhtmlBody: xhtmlBody,
             replyTo: replyTo,
+            encryption: encryption,
             timestamp: timestamp,
             meta: meta
         )
@@ -211,7 +221,7 @@ public final class ChatStore: ObservableObject {
         }
     }
 
-    public func appendOutgoing(threadJid: String, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
+    public func appendOutgoing(threadJid: String, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, encryption: MessageEncryptionState = .cleartext, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
         let msg = ChatMessage(
             id: id ?? UUID().uuidString,
             threadJid: threadJid,
@@ -219,6 +229,7 @@ public final class ChatStore: ObservableObject {
             body: body,
             xhtmlBody: xhtmlBody,
             replyTo: replyTo,
+            encryption: encryption,
             timestamp: timestamp,
             meta: meta
         )

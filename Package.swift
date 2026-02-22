@@ -12,13 +12,15 @@ let package = Package(
         .library(name: "SwitchCore", targets: ["SwitchCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/tigase/Martin.git", from: "3.2.1"),
+        .package(url: "https://github.com/tigase/Martin.git", branch: "master"),
+        .package(url: "https://github.com/tigase/MartinOMEMO.git", branch: "master"),
     ],
     targets: [
         .target(
             name: "SwitchCore",
             dependencies: [
                 .product(name: "Martin", package: "Martin"),
+                .product(name: "MartinOMEMO", package: "MartinOMEMO"),
             ]
         ),
         .executableTarget(

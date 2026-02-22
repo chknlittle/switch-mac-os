@@ -70,7 +70,8 @@ private struct DirectoryShellView: View {
                     composerText = ""
                 },
                 isEnabled: directory.chatTarget != nil,
-                isTyping: isChatTargetTyping
+                isTyping: isChatTargetTyping,
+                encryptionStatus: xmpp.encryptionStatus(for: directory.chatTarget?.jid)
             )
         }
         .onAppear {
@@ -930,6 +931,7 @@ private struct ChatPane: View {
     let onSend: () -> Void
     let isEnabled: Bool
     let isTyping: Bool
+    let encryptionStatus: XMPPService.ThreadEncryptionStatus?
 
     private let bottomAnchorId: String = "__bottom__"
     private let composerMinHeight: CGFloat = 28
@@ -956,6 +958,9 @@ private struct ChatPane: View {
                     HStack(spacing: 8) {
                         Text(title)
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        if let encryptionStatus {
+                            encryptionChip(encryptionStatus)
+                        }
                         if isTyping {
                             ProgressView()
                                 .scaleEffect(0.5)
@@ -1000,10 +1005,11 @@ private struct ChatPane: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
-                                ForEach(messages) { msg in
+                                ForEach(Array(messages.enumerated()), id: \.element.id) { index, msg in
                                     MessageRow(
                                         msg: msg,
                                         repliedMessage: msg.replyTo.flatMap { messagesById[$0.id] },
+                                        showTimestamp: shouldShowTimestamp(for: index),
                                         xmpp: xmpp,
                                         onReply: { tapped in
                                             pendingReply = PendingReplyTarget.from(message: tapped, localBareJid: xmpp.client.userBareJid.stringValue)
@@ -1116,6 +1122,30 @@ private struct ChatPane: View {
         }
     }
 
+    @ViewBuilder
+    private func encryptionChip(_ status: XMPPService.ThreadEncryptionStatus) -> some View {
+        switch status {
+        case .encrypted:
+            Label("Encrypted", systemImage: "lock.fill")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.green)
+        case .requiredUnavailable(let reason):
+            Label(reason, systemImage: "lock.slash")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.red)
+                .lineLimit(1)
+        case .decryptionFailed(let reason):
+            Label(reason, systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.orange)
+                .lineLimit(1)
+        case .cleartext:
+            Label("Cleartext", systemImage: "lock.open")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var hasSendableContent: Bool {
         if pendingImage != nil { return true }
         return !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1224,9 +1254,25 @@ private struct ChatPane: View {
         return parts.joined(separator: "\n\n")
     }
 
+    private func shouldShowTimestamp(for index: Int) -> Bool {
+        guard messages.indices.contains(index) else { return false }
+        guard index < messages.count - 1 else { return true }
+
+        let current = messages[index]
+        let next = messages[index + 1]
+
+        if current.direction != next.direction {
+            return true
+        }
+
+        let gap = next.timestamp.timeIntervalSince(current.timestamp)
+        return gap >= 5 * 60
+    }
+
     private struct MessageRow: View {
         let msg: ChatMessage
         let repliedMessage: ChatMessage?
+        let showTimestamp: Bool
         let xmpp: XMPPService
         let onReply: (ChatMessage) -> Void
 
@@ -1299,28 +1345,44 @@ private struct ChatPane: View {
                             .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
                     }
 
-                    HStack(spacing: 6) {
-                        if let tool = msg.meta?.tool {
-                            Text(tool)
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.secondary.opacity(0.8))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Theme.chipBg)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                        .stroke(Theme.chipBorder, lineWidth: 1)
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    if msg.meta?.tool != nil || msg.meta?.runStats != nil || showTimestamp {
+                        HStack(spacing: 6) {
+                            switch msg.encryption {
+                            case .encrypted, .decrypted:
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundStyle(.green.opacity(0.9))
+                            case .decryptionFailed:
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundStyle(.orange.opacity(0.9))
+                            case .cleartext:
+                                EmptyView()
+                            }
+                            if let tool = msg.meta?.tool {
+                                Text(tool)
+                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.secondary.opacity(0.8))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(Theme.chipBg)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                            .stroke(Theme.chipBorder, lineWidth: 1)
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                            }
+                            if let stats = msg.meta?.runStats {
+                                runStatsView(stats)
+                            }
+                            if showTimestamp {
+                                Text(formatTimestamp(msg.timestamp))
+                                    .font(.system(size: 10, weight: .regular, design: .default))
+                                    .foregroundStyle(.secondary.opacity(0.7))
+                            }
                         }
-                        if let stats = msg.meta?.runStats {
-                            runStatsView(stats)
-                        }
-                        Text(formatTimestamp(msg.timestamp))
-                            .font(.system(size: 10, weight: .regular, design: .default))
-                            .foregroundStyle(.secondary.opacity(0.7))
+                        .padding(.horizontal, 4)
                     }
-                    .padding(.horizontal, 4)
                 }
 
                 if msg.direction == .incoming {
