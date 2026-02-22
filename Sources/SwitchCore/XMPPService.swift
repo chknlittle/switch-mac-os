@@ -426,7 +426,10 @@ public final class XMPPService: ObservableObject {
         let rawMamRecencyLast = ProcessInfo.processInfo.environment["SWITCH_MAM_RECENCY_LAST_ITEMS"] ?? "1"
         let parsedMamRecencyLast = Int(rawMamRecencyLast) ?? 1
         self.mamRecencyLastItems = max(1, min(parsedMamRecencyLast, 5))
-        self.omemoRequireMarkedThreads = Self.envBool("SWITCH_OMEMO_REQUIRE_FOR_MARKED_THREADS", defaultValue: true)
+        self.omemoRequireMarkedThreads = EnvLoader.parseBool(
+            ProcessInfo.processInfo.environment["SWITCH_OMEMO_REQUIRE_FOR_MARKED_THREADS"],
+            default: true
+        )
 
         registerDefaultModules()
         bindPublishers()
@@ -1049,18 +1052,6 @@ public final class XMPPService: ObservableObject {
         element.children.contains { child in
             localName(of: child.name) == "encrypted" && (child.xmlns == omemoNamespace || child.xmlns == OMEMOModule.XMLNS)
         }
-    }
-
-    private static func envBool(_ key: String, defaultValue: Bool) -> Bool {
-        let raw = ProcessInfo.processInfo.environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard let raw, !raw.isEmpty else { return defaultValue }
-        if raw == "1" || raw == "true" || raw == "yes" || raw == "on" {
-            return true
-        }
-        if raw == "0" || raw == "false" || raw == "no" || raw == "off" {
-            return false
-        }
-        return defaultValue
     }
 
     private func formatOMEMOError(_ error: Error) -> String {
