@@ -924,6 +924,7 @@ public final class XMPPService: ObservableObject {
                 }
 
                 let stableId = parseStableMessageId(from: received.message.element) ?? received.message.id
+                let messageCacheId = stableId ?? ""
                 let message = received.message
                 var body = message.body
                 var encryption: MessageEncryptionState = .cleartext
@@ -935,11 +936,11 @@ public final class XMPPService: ObservableObject {
                             body = decodedMessage.body ?? body
                             encryption = .decrypted
                             self.threadEncryptionStatus[from] = .encrypted
-                            if let body, !body.isEmpty {
-                                self.decryptedMessageCache?.save(body: body, for: stableId)
+                            if let body, !body.isEmpty, !messageCacheId.isEmpty {
+                                self.decryptedMessageCache?.save(body: body, for: messageCacheId)
                             }
                         case .successTransportKey:
-                            if let cached = self.decryptedMessageCache?.body(for: stableId) {
+                            if !messageCacheId.isEmpty, let cached = self.decryptedMessageCache?.body(for: messageCacheId) {
                                 body = cached
                                 encryption = .decrypted
                                 self.threadEncryptionStatus[from] = .encrypted
@@ -948,7 +949,7 @@ public final class XMPPService: ObservableObject {
                                 self.threadEncryptionStatus[from] = .decryptionFailed("Message payload missing")
                             }
                         case .failure(let err):
-                            if let cached = self.decryptedMessageCache?.body(for: stableId) {
+                            if !messageCacheId.isEmpty, let cached = self.decryptedMessageCache?.body(for: messageCacheId) {
                                 body = cached
                                 encryption = .decrypted
                                 self.threadEncryptionStatus[from] = .encrypted
