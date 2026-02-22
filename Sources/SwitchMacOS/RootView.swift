@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CryptoKit
 import Foundation
 import SwiftUI
 import SwitchCore
@@ -1509,11 +1510,47 @@ private struct ChatPane: View {
                 )
             }
 
+            for raw in extractAESGCMUrls(from: body) {
+                guard let url = URL(string: raw) else { continue }
+                guard isInlineRenderableImageURL(url) else { continue }
+                if seenUrls.contains(raw) { continue }
+                seenUrls.insert(raw)
+
+                let filename = url.lastPathComponent.isEmpty ? nil : url.lastPathComponent
+                let mime: String?
+                if let type = UTType(filenameExtension: url.pathExtension) {
+                    mime = type.preferredMIMEType
+                } else {
+                    mime = nil
+                }
+
+                attachments.append(
+                    SwitchAttachment(
+                        id: "inline-url:\(raw)",
+                        kind: "image",
+                        mime: mime,
+                        publicUrl: raw,
+                        filename: filename
+                    )
+                )
+            }
+
             return attachments
         }
 
+        private func extractAESGCMUrls(from text: String) -> [String] {
+            guard let regex = try? NSRegularExpression(pattern: "aesgcm://[^\\s]+#[0-9A-Fa-f]{88}") else {
+                return []
+            }
+            let range = NSRange(text.startIndex..., in: text)
+            return regex.matches(in: text, options: [], range: range).compactMap { match in
+                guard let swiftRange = Range(match.range, in: text) else { return nil }
+                return String(text[swiftRange])
+            }
+        }
+
         private func isInlineRenderableImageURL(_ url: URL) -> Bool {
-            guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" || scheme == "file" else {
+            guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" || scheme == "file" || scheme == "aesgcm" else {
                 return false
             }
 
@@ -1757,7 +1794,7 @@ private struct ChatPane: View {
 
         private func looksLikeUrl(_ s: String) -> Bool {
             guard let u = URL(string: s.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
-            return u.scheme == "http" || u.scheme == "https" || u.scheme == "file"
+            return u.scheme == "http" || u.scheme == "https" || u.scheme == "file" || u.scheme == "aesgcm"
         }
 
         private var bubbleColor: Color {
@@ -1779,8 +1816,8 @@ private struct ChatPane: View {
         }
 
         private func openAttachment(_ att: SwitchAttachment) {
-            if let s = att.publicUrl, let u = URL(string: s) {
-                NSWorkspace.shared.open(u)
+            if let s = att.publicUrl {
+                AttachmentThumbnail.openAttachment(publicUrl: s, localPath: att.localPath, filename: att.filename)
                 return
             }
             if let p = att.localPath {
@@ -1791,15 +1828,22 @@ private struct ChatPane: View {
 
         private struct AttachmentThumbnail: View {
             let att: SwitchAttachment
+            @State private var aesgcmImage: NSImage? = nil
+            @State private var aesgcmFileURL: URL? = nil
+            @State private var isDecrypting: Bool = false
+            @State private var decryptFailed: Bool = false
 
             var body: some View {
+                let source = bestSource()
+
                 Button(action: { open() }) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(Color.secondary.opacity(0.10))
 
-                        if let url = bestUrl() {
-                            if url.isFileURL {
+                        if let source {
+                            switch source {
+                            case .file(let url):
                                 if let img = NSImage(contentsOf: url) {
                                     Image(nsImage: img)
                                         .resizable()
@@ -1807,7 +1851,7 @@ private struct ChatPane: View {
                                 } else {
                                     placeholder
                                 }
-                            } else {
+                            case .remote(let url):
                                 AsyncImage(url: url) { phase in
                                     switch phase {
                                     case .empty:
@@ -1822,6 +1866,19 @@ private struct ChatPane: View {
                                         placeholder
                                     }
                                 }
+                            case .aesgcm:
+                                if let img = aesgcmImage {
+                                    Image(nsImage: img)
+                                        .resizable()
+                                        .scaledToFill()
+                                } else if isDecrypting {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                } else if decryptFailed {
+                                    placeholder
+                                } else {
+                                    placeholder
+                                }
                             }
                         } else {
                             placeholder
@@ -1835,6 +1892,9 @@ private struct ChatPane: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .task(id: source?.cacheKey ?? att.id) {
+                    await loadAESGCMPreviewIfNeeded(source: source)
+                }
             }
 
             private var placeholder: some View {
@@ -1850,16 +1910,223 @@ private struct ChatPane: View {
                 }
             }
 
-            private func bestUrl() -> URL? {
-                if let s = att.publicUrl, let u = URL(string: s) { return u }
-                if let p = att.localPath { return URL(fileURLWithPath: p) }
+            private func open() {
+                let source = bestSource()
+                switch source {
+                case .file(let url):
+                    NSWorkspace.shared.open(url)
+                case .remote(let url):
+                    NSWorkspace.shared.open(url)
+                case .aesgcm(let descriptor):
+                    Task {
+                        if let existing = aesgcmFileURL {
+                            await MainActor.run {
+                                NSWorkspace.shared.open(existing)
+                            }
+                            return
+                        }
+
+                        if let file = try? await Self.resolveAESGCMFile(descriptor: descriptor) {
+                            await MainActor.run {
+                                aesgcmFileURL = file
+                                NSWorkspace.shared.open(file)
+                            }
+                        }
+                    }
+                case .none:
+                    break
+                }
+            }
+
+            @MainActor
+            private func loadAESGCMPreviewIfNeeded(source: ThumbnailSource?) async {
+                guard case .aesgcm(let descriptor) = source else { return }
+                if aesgcmImage != nil || isDecrypting { return }
+
+                isDecrypting = true
+                defer { isDecrypting = false }
+
+                do {
+                    let data = try await Self.decryptAESGCM(descriptor: descriptor)
+                    if let img = NSImage(data: data) {
+                        aesgcmImage = img
+                    }
+                    aesgcmFileURL = try await Self.cacheDecryptedFile(data: data, descriptor: descriptor)
+                    decryptFailed = false
+                } catch {
+                    decryptFailed = true
+                }
+            }
+
+            private func bestSource() -> ThumbnailSource? {
+                if let s = att.publicUrl,
+                   let descriptor = Self.parseAESGCMDescriptor(from: s, fallbackFilename: att.filename) {
+                    return .aesgcm(descriptor)
+                }
+                if let s = att.publicUrl, let u = URL(string: s) {
+                    return .remote(u)
+                }
+                if let p = att.localPath {
+                    return .file(URL(fileURLWithPath: p))
+                }
                 return nil
             }
 
-            private func open() {
-                if let url = bestUrl() {
-                    NSWorkspace.shared.open(url)
+            static func openAttachment(publicUrl: String?, localPath: String?, filename: String?) {
+                if let publicUrl,
+                   let descriptor = parseAESGCMDescriptor(from: publicUrl, fallbackFilename: filename) {
+                    Task {
+                        if let file = try? await resolveAESGCMFile(descriptor: descriptor) {
+                            await MainActor.run {
+                                NSWorkspace.shared.open(file)
+                            }
+                        }
+                    }
+                    return
                 }
+
+                if let publicUrl, let u = URL(string: publicUrl) {
+                    NSWorkspace.shared.open(u)
+                    return
+                }
+                if let localPath {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: localPath))
+                }
+            }
+
+            private enum ThumbnailSource: Hashable {
+                case file(URL)
+                case remote(URL)
+                case aesgcm(AESGCMDescriptor)
+
+                var cacheKey: String {
+                    switch self {
+                    case .file(let url):
+                        return "file:\(url.path)"
+                    case .remote(let url):
+                        return "remote:\(url.absoluteString)"
+                    case .aesgcm(let descriptor):
+                        return "aesgcm:\(descriptor.rawURL)"
+                    }
+                }
+            }
+
+            private struct AESGCMDescriptor: Hashable {
+                let rawURL: String
+                let downloadURL: URL
+                let iv: Data
+                let key: Data
+                let filename: String?
+            }
+
+            private static let decryptedDataCache = NSCache<NSString, NSData>()
+
+            private static func parseAESGCMDescriptor(from raw: String, fallbackFilename: String?) -> AESGCMDescriptor? {
+                guard var components = URLComponents(string: raw),
+                      components.scheme?.lowercased() == "aesgcm",
+                      let fragment = components.fragment,
+                      fragment.count == 88,
+                      let bytes = decodeHex(fragment),
+                      bytes.count == 44 else {
+                    return nil
+                }
+
+                let iv = bytes.prefix(12)
+                let key = bytes.dropFirst(12)
+
+                components.scheme = "https"
+                components.fragment = nil
+                guard let downloadURL = components.url else { return nil }
+
+                let inferredName = downloadURL.lastPathComponent.isEmpty ? nil : downloadURL.lastPathComponent
+                return AESGCMDescriptor(
+                    rawURL: raw,
+                    downloadURL: downloadURL,
+                    iv: Data(iv),
+                    key: Data(key),
+                    filename: fallbackFilename ?? inferredName
+                )
+            }
+
+            private static func decodeHex(_ s: String) -> Data? {
+                let chars = Array(s)
+                if chars.count % 2 != 0 { return nil }
+
+                var out = Data(capacity: chars.count / 2)
+                var i = 0
+                while i < chars.count {
+                    let hi = chars[i]
+                    let lo = chars[i + 1]
+                    guard let high = hexValue(hi), let low = hexValue(lo) else { return nil }
+                    out.append((high << 4) | low)
+                    i += 2
+                }
+                return out
+            }
+
+            private static func hexValue(_ c: Character) -> UInt8? {
+                guard let value = UInt8(String(c), radix: 16) else { return nil }
+                return value
+            }
+
+            private static func decryptAESGCM(descriptor: AESGCMDescriptor) async throws -> Data {
+                if let cached = decryptedDataCache.object(forKey: descriptor.rawURL as NSString) {
+                    return Data(referencing: cached)
+                }
+
+                let (ciphertextWithTag, response) = try await URLSession.shared.data(from: descriptor.downloadURL)
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    throw NSError(domain: "AESGCMDownload", code: http.statusCode)
+                }
+
+                guard ciphertextWithTag.count >= 17 else {
+                    throw NSError(domain: "AESGCMDecrypt", code: 1)
+                }
+
+                let ciphertext = ciphertextWithTag.dropLast(16)
+                let tag = ciphertextWithTag.suffix(16)
+                let nonce = try AES.GCM.Nonce(data: descriptor.iv)
+                let key = SymmetricKey(data: descriptor.key)
+                let sealed = try AES.GCM.SealedBox(nonce: nonce, ciphertext: Data(ciphertext), tag: Data(tag))
+                let plain = try AES.GCM.open(sealed, using: key)
+
+                let data = Data(plain)
+                decryptedDataCache.setObject(NSData(data: data), forKey: descriptor.rawURL as NSString)
+                return data
+            }
+
+            private static func resolveAESGCMFile(descriptor: AESGCMDescriptor) async throws -> URL {
+                let data = try await decryptAESGCM(descriptor: descriptor)
+                return try await cacheDecryptedFile(data: data, descriptor: descriptor)
+            }
+
+            private static func cacheDecryptedFile(data: Data, descriptor: AESGCMDescriptor) async throws -> URL {
+                let fm = FileManager.default
+                let dir = fm.temporaryDirectory.appendingPathComponent("switch-aesgcm", isDirectory: true)
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+
+                let digest = SHA256.hash(data: Data(descriptor.rawURL.utf8)).map { String(format: "%02x", $0) }.joined()
+                let ext: String = {
+                    if let filename = descriptor.filename,
+                       let parsed = URL(string: filename),
+                       !parsed.pathExtension.isEmpty {
+                        return parsed.pathExtension
+                    }
+                    if let filename = descriptor.filename,
+                       !URL(fileURLWithPath: filename).pathExtension.isEmpty {
+                        return URL(fileURLWithPath: filename).pathExtension
+                    }
+                    if !descriptor.downloadURL.pathExtension.isEmpty {
+                        return descriptor.downloadURL.pathExtension
+                    }
+                    return "bin"
+                }()
+
+                let fileURL = dir.appendingPathComponent("\(digest).\(ext)")
+                if !fm.fileExists(atPath: fileURL.path) {
+                    try data.write(to: fileURL, options: [.atomic])
+                }
+                return fileURL
             }
         }
     }
