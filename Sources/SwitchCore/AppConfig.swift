@@ -188,6 +188,21 @@ public enum EnvLoader {
         return (trimmed, defaultPort)
     }
 
+    public static func parseBool(_ rawValue: String?, default defaultValue: Bool) -> Bool {
+        guard let raw = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty else {
+            return defaultValue
+        }
+
+        switch raw {
+        case "1", "true", "yes", "on":
+            return true
+        case "0", "false", "no", "off":
+            return false
+        default:
+            return defaultValue
+        }
+    }
+
     private static func readDotEnv(at path: String) throws -> [String: String] {
         guard FileManager.default.fileExists(atPath: path) else {
             return [:]

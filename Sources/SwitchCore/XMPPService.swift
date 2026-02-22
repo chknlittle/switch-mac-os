@@ -2,6 +2,7 @@ import Combine
 import CryptoKit
 import Foundation
 import Martin
+import MartinOMEMO
 import os
 
 private let logger = Logger(subsystem: "com.switch.macos", category: "XMPPService")
@@ -13,6 +14,7 @@ private let xhtmlImNamespace = "http://jabber.org/protocol/xhtml-im"
 private let xhtmlNamespace = "http://www.w3.org/1999/xhtml"
 private let sidNamespace = "urn:xmpp:sid:0"
 private let replyNamespace = "urn:xmpp:reply:0"
+private let omemoNamespace = "eu.siacs.conversations.axolotl"
 
 private func localName(of raw: String) -> String {
     // Handles:
@@ -338,12 +340,21 @@ public final class XMPPService: ObservableObject {
     public let client = XMPPClient()
     private let debugLogger = DebugStreamLogger()
 
+    public enum ThreadEncryptionStatus: Hashable, Sendable {
+        case cleartext
+        case encrypted
+        case requiredUnavailable(String)
+        case decryptionFailed(String)
+    }
+
     /// Avatar image bytes keyed by bare JID (XEP-0084 PEP user avatar)
     @Published public private(set) var avatarDataByJid: [String: Data] = [:]
     private var avatarLoadingJids: Set<String> = []
 
     @Published public private(set) var status: Status = .disconnected
     @Published public private(set) var statusText: String = "Disconnected"
+    @Published public private(set) var threadEncryptionStatus: [String: ThreadEncryptionStatus] = [:]
+    @Published public private(set) var omemoRequiredThreads: Set<String> = []
 
     private let messageModule: MessageModule
     private let pubSubModule: PubSubModule
@@ -352,6 +363,10 @@ public final class XMPPService: ObservableObject {
     private let httpUploadModule: HttpFileUploadModule
     private let pepUserAvatarModule: PEPUserAvatarModule
     private let vcardTempModule: VCardTempModule
+    private var omemoModule: OMEMOModule?
+    private var omemoSignalContext: SignalContext?
+    private var omemoStorage: SwitchOMEMOStorage?
+    private var omemoRegistered = false
     private var cancellables: Set<AnyCancellable> = []
 
     private var mamQueryToThread: [String: String] = [:]
@@ -384,6 +399,8 @@ public final class XMPPService: ObservableObject {
     private let mamRecencyLastItems: Int
 
     private var cachedUploadComponents: [HttpFileUploadModule.UploadComponent] = []
+    private let omemoMarker = "I sent you an OMEMO encrypted message"
+    private let omemoRequireMarkedThreads: Bool
 
     /// JIDs currently in "composing" (typing) state
     @Published public private(set) var composingJids: Set<String> = []
@@ -398,6 +415,10 @@ public final class XMPPService: ObservableObject {
         self.pepUserAvatarModule = PEPUserAvatarModule()
         self.vcardTempModule = VCardTempModule()
 
+        self.omemoStorage = nil
+        self.omemoSignalContext = nil
+        self.omemoModule = nil
+
         let rawMamLast = ProcessInfo.processInfo.environment["SWITCH_MAM_LAST_ITEMS"] ?? "50"
         let parsedMamLast = Int(rawMamLast) ?? 50
         self.mamLastItems = max(10, min(parsedMamLast, 500))
@@ -405,6 +426,10 @@ public final class XMPPService: ObservableObject {
         let rawMamRecencyLast = ProcessInfo.processInfo.environment["SWITCH_MAM_RECENCY_LAST_ITEMS"] ?? "1"
         let parsedMamRecencyLast = Int(rawMamRecencyLast) ?? 1
         self.mamRecencyLastItems = max(1, min(parsedMamRecencyLast, 5))
+        self.omemoRequireMarkedThreads = EnvLoader.parseBool(
+            ProcessInfo.processInfo.environment["SWITCH_OMEMO_REQUIRE_FOR_MARKED_THREADS"],
+            default: true
+        )
 
         registerDefaultModules()
         bindPublishers()
@@ -462,6 +487,7 @@ public final class XMPPService: ObservableObject {
         client.streamLogger = debugLogger
         logger.info("Connecting to \(config.xmppHost, privacy: .public):\(config.xmppPort) as \(config.xmppJid, privacy: .public)")
         configureClient(using: config)
+        setupOMEMOIfNeeded()
         status = .connecting
         statusText = "Connecting..."
         client.login()
@@ -542,10 +568,10 @@ public final class XMPPService: ObservableObject {
         guard let encoded = SubagentWorkCodec.encode(envelope) else {
             return
         }
-        sendWireMessage(to: subagentJid, wireBody: encoded, displayBody: body, replyTo: nil, metaElement: nil, metaForStore: nil)
+        sendWireMessage(to: subagentJid, wireBody: encoded, displayBody: body, replyTo: nil, metaElement: nil, metaForStore: nil, allowOMEMO: false)
     }
 
-    private func sendWireMessage(to bareJid: String, wireBody: String, displayBody: String, replyTo: MessageReplyReference?, metaElement: Element?, metaForStore: MessageMeta?, extraElements: [Element] = []) {
+    private func sendWireMessage(to bareJid: String, wireBody: String, displayBody: String, replyTo: MessageReplyReference?, metaElement: Element?, metaForStore: MessageMeta?, extraElements: [Element] = [], allowOMEMO: Bool = true) {
         let to = BareJID(bareJid)
         let chat = messageModule.chatManager.createChat(for: client, with: to)
         guard let conversation = chat as? ConversationBase else {
@@ -562,9 +588,49 @@ public final class XMPPService: ObservableObject {
         for el in extraElements {
             msg.element.addChild(el)
         }
-        conversation.send(message: msg, completionHandler: nil)
 
-        chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, id: msg.id, timestamp: Date(), meta: metaForStore)
+        let requireOMEMO = shouldRequireOMEMO(for: bareJid)
+        let shouldTryOMEMO = allowOMEMO && (requireOMEMO || (omemoModule?.isAvailable(for: to) ?? false))
+
+        if shouldTryOMEMO, let omemoModule {
+            omemoModule.encode(message: msg) { [weak self] result in
+                guard let self else { return }
+                Task { @MainActor in
+                    switch result {
+                    case .successMessage(let encrypted, _):
+                        conversation.send(message: encrypted, completionHandler: nil)
+                        self.threadEncryptionStatus[bareJid] = .encrypted
+                        self.chatStore.appendOutgoing(
+                            threadJid: bareJid,
+                            body: displayBody,
+                            replyTo: replyTo,
+                            encryption: .encrypted,
+                            id: encrypted.id,
+                            timestamp: Date(),
+                            meta: metaForStore
+                        )
+                    case .failure(let err):
+                        if requireOMEMO && self.omemoRequireMarkedThreads {
+                            self.threadEncryptionStatus[bareJid] = .requiredUnavailable("Encryption unavailable: \(self.formatOMEMOError(err))")
+                            return
+                        }
+                        conversation.send(message: msg, completionHandler: nil)
+                        self.threadEncryptionStatus[bareJid] = .cleartext
+                        self.chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, encryption: .cleartext, id: msg.id, timestamp: Date(), meta: metaForStore)
+                    }
+                }
+            }
+            return
+        }
+
+        if requireOMEMO && omemoRequireMarkedThreads {
+            threadEncryptionStatus[bareJid] = .requiredUnavailable("Encryption required for this contact")
+            return
+        }
+
+        conversation.send(message: msg, completionHandler: nil)
+        threadEncryptionStatus[bareJid] = .cleartext
+        chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, encryption: .cleartext, id: msg.id, timestamp: Date(), meta: metaForStore)
     }
 
     public var pubSubItemsEvents: AnyPublisher<PubSubModule.ItemNotification, Never> {
@@ -756,6 +822,26 @@ public final class XMPPService: ObservableObject {
         client.modulesManager.register(vcardTempModule)
     }
 
+    private func setupOMEMOIfNeeded() {
+        if omemoRegistered {
+            return
+        }
+
+        let storage = SwitchOMEMOStorage(context: client)
+        guard let signalContext = SignalContext(withStorage: storage) else {
+            logger.error("Unable to initialize SignalContext for OMEMO")
+            return
+        }
+        let module = OMEMOModule(aesGCMEngine: SwitchAESGCMEngine(), signalContext: signalContext, signalStorage: storage)
+        module.defaultBody = "I sent you an OMEMO encrypted message but your client doesn’t seem to support that. Find more information on https://conversations.im/omemo"
+
+        self.omemoStorage = storage
+        self.omemoSignalContext = signalContext
+        self.omemoModule = module
+        client.modulesManager.register(module)
+        omemoRegistered = true
+    }
+
     private func pickUploadComponent(for byteCount: Int) async throws -> HttpFileUploadModule.UploadComponent {
         if let ok = cachedUploadComponents.first(where: { $0.maxSize >= byteCount }) {
             return ok
@@ -820,6 +906,10 @@ public final class XMPPService: ObservableObject {
             .sink { [weak self] received in
                 guard let self else { return }
                 guard let from = received.message.from?.bareJid.stringValue else { return }
+                let hasOMEMOPayload = self.hasOMEMOPayload(received.message.element)
+                if hasOMEMOPayload {
+                    self.omemoRequiredThreads.insert(from)
+                }
 
                 // Track chat state (typing indicators)
                 if let chatState = received.message.chatState {
@@ -831,15 +921,46 @@ public final class XMPPService: ObservableObject {
                     }
                 }
 
+                let stableId = parseStableMessageId(from: received.message.element) ?? received.message.id
+                let message = received.message
+                var body = message.body
+                var encryption: MessageEncryptionState = .cleartext
+
+                if hasOMEMOPayload {
+                    if let omemoModule {
+                        switch omemoModule.decode(message: message, serverMsgId: stableId) {
+                        case .successMessage(let decodedMessage, _):
+                            body = decodedMessage.body ?? body
+                            encryption = .decrypted
+                            self.threadEncryptionStatus[from] = .encrypted
+                        case .successTransportKey:
+                            encryption = .decryptionFailed
+                            self.threadEncryptionStatus[from] = .decryptionFailed("Message payload missing")
+                        case .failure(let err):
+                            encryption = .decryptionFailed
+                            self.threadEncryptionStatus[from] = .decryptionFailed("Decryption failed: \(self.formatOMEMOError(err))")
+                            if body == nil || body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                                body = "[Unable to decrypt OMEMO message: \(self.formatOMEMOError(err))]"
+                            }
+                        }
+                    } else {
+                        encryption = .decryptionFailed
+                        self.threadEncryptionStatus[from] = .decryptionFailed("OMEMO module unavailable")
+                    }
+                }
+
+                if body?.contains(self.omemoMarker) == true {
+                    self.omemoRequiredThreads.insert(from)
+                }
+
                 // Process message body if present
-                guard let body = received.message.body else { return }
+                guard let body else { return }
                 // Receiving a message with body means they're done typing
                 self.composingJids.remove(from)
-                let stableId = parseStableMessageId(from: received.message.element) ?? received.message.id
-                let meta = parseMessageMeta(from: received.message.element)
-                let xhtmlBody = parseXHTMLBody(from: received.message.element)
-                let replyTo = parseReplyReference(from: received.message.element)
-                self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, id: stableId, timestamp: received.message.delay?.stamp ?? Date(), meta: meta)
+                let meta = parseMessageMeta(from: message.element)
+                let xhtmlBody = parseXHTMLBody(from: message.element)
+                let replyTo = parseReplyReference(from: message.element)
+                self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, encryption: encryption, id: stableId, timestamp: message.delay?.stamp ?? Date(), meta: meta)
             }
             .store(in: &cancellables)
 
@@ -861,7 +982,11 @@ public final class XMPPService: ObservableObject {
                     return
                 }
 
-                guard let body = archived.message.body, !body.isEmpty else { return }
+                let message = archived.message
+                let hasOMEMOPayload = self.hasOMEMOPayload(message.element)
+                if hasOMEMOPayload {
+                    self.omemoRequiredThreads.insert(threadJid)
+                }
 
                 let localBare = self.client.userBareJid
                 let fromBare = archived.message.from?.bareJid
@@ -869,17 +994,79 @@ public final class XMPPService: ObservableObject {
                 let id = parseStableMessageId(from: archived.message.element)
                     ?? archived.message.id
                     ?? "mam:\(archived.messageId)"
-                let meta = parseMessageMeta(from: archived.message.element)
-                let xhtmlBody = parseXHTMLBody(from: archived.message.element)
-                let replyTo = parseReplyReference(from: archived.message.element)
+                var body = message.body
+                var encryption: MessageEncryptionState = .cleartext
+
+                if hasOMEMOPayload {
+                    if let omemoModule {
+                        let decodeFrom = fromBare ?? BareJID(threadJid)
+                        switch omemoModule.decode(message: message, from: decodeFrom, serverMsgId: id) {
+                        case .successMessage(let decodedMessage, _):
+                            body = decodedMessage.body ?? body
+                            encryption = .decrypted
+                        case .successTransportKey:
+                            encryption = .decryptionFailed
+                        case .failure(let err):
+                            encryption = .decryptionFailed
+                            if body == nil || body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                                body = "[Unable to decrypt OMEMO message: \(self.formatOMEMOError(err))]"
+                            }
+                        }
+                    } else {
+                        encryption = .decryptionFailed
+                    }
+                }
+
+                guard let body, !body.isEmpty else { return }
+
+                let meta = parseMessageMeta(from: message.element)
+                let xhtmlBody = parseXHTMLBody(from: message.element)
+                let replyTo = parseReplyReference(from: message.element)
 
                 switch direction {
                 case .incoming:
-                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
+                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, encryption: encryption, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
                 case .outgoing:
-                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
+                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, encryption: encryption, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
                 }
             }
             .store(in: &cancellables)
+    }
+
+    public func encryptionStatus(for threadJid: String?) -> ThreadEncryptionStatus? {
+        guard let threadJid else { return nil }
+        if let current = threadEncryptionStatus[threadJid] {
+            return current
+        }
+        if omemoRequiredThreads.contains(threadJid) {
+            return .requiredUnavailable("Encryption required")
+        }
+        return nil
+    }
+
+    private func shouldRequireOMEMO(for bareJid: String) -> Bool {
+        omemoRequiredThreads.contains(bareJid)
+    }
+
+    private func hasOMEMOPayload(_ element: Element) -> Bool {
+        element.children.contains { child in
+            localName(of: child.name) == "encrypted" && (child.xmlns == omemoNamespace || child.xmlns == OMEMOModule.XMLNS)
+        }
+    }
+
+    private func formatOMEMOError(_ error: Error) -> String {
+        let short = String(describing: error).trimmingCharacters(in: .whitespacesAndNewlines)
+        let detailed = String(reflecting: error).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if short.isEmpty && detailed.isEmpty {
+            return "unknown"
+        }
+        if short.isEmpty {
+            return detailed
+        }
+        if detailed.isEmpty || short == detailed {
+            return short
+        }
+        return "\(short) [\(detailed)]"
     }
 }
