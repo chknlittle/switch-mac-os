@@ -608,7 +608,7 @@ public final class XMPPService: ObservableObject {
                         )
                     case .failure(let err):
                         if requireOMEMO && self.omemoRequireMarkedThreads {
-                            self.threadEncryptionStatus[bareJid] = .requiredUnavailable("Encryption unavailable: \(err)")
+                            self.threadEncryptionStatus[bareJid] = .requiredUnavailable("Encryption unavailable: \(self.formatOMEMOError(err))")
                             return
                         }
                         conversation.send(message: msg, completionHandler: nil)
@@ -935,9 +935,9 @@ public final class XMPPService: ObservableObject {
                             self.threadEncryptionStatus[from] = .decryptionFailed("Message payload missing")
                         case .failure(let err):
                             encryption = .decryptionFailed
-                            self.threadEncryptionStatus[from] = .decryptionFailed("Decryption failed: \(err)")
+                            self.threadEncryptionStatus[from] = .decryptionFailed("Decryption failed: \(self.formatOMEMOError(err))")
                             if body == nil || body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
-                                body = "[Unable to decrypt OMEMO message: \(err)]"
+                                body = "[Unable to decrypt OMEMO message: \(self.formatOMEMOError(err))]"
                             }
                         }
                     } else {
@@ -1006,7 +1006,7 @@ public final class XMPPService: ObservableObject {
                         case .failure(let err):
                             encryption = .decryptionFailed
                             if body == nil || body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
-                                body = "[Unable to decrypt OMEMO message: \(err)]"
+                                body = "[Unable to decrypt OMEMO message: \(self.formatOMEMOError(err))]"
                             }
                         }
                     } else {
@@ -1061,5 +1061,21 @@ public final class XMPPService: ObservableObject {
             return false
         }
         return defaultValue
+    }
+
+    private func formatOMEMOError(_ error: Error) -> String {
+        let short = String(describing: error).trimmingCharacters(in: .whitespacesAndNewlines)
+        let detailed = String(reflecting: error).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if short.isEmpty && detailed.isEmpty {
+            return "unknown"
+        }
+        if short.isEmpty {
+            return detailed
+        }
+        if detailed.isEmpty || short == detailed {
+            return short
+        }
+        return "\(short) [\(detailed)]"
     }
 }

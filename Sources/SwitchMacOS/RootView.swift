@@ -970,6 +970,14 @@ private struct ChatPane: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+                    if let encryptionDetail {
+                        Text(encryptionDetail)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(encryptionDetailColor)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
 
                 Spacer(minLength: 0)
@@ -1133,16 +1141,40 @@ private struct ChatPane: View {
             Label(reason, systemImage: "lock.slash")
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(.red)
-                .lineLimit(1)
+                .lineLimit(2)
         case .decryptionFailed(let reason):
             Label(reason, systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(.orange)
-                .lineLimit(1)
+                .lineLimit(2)
         case .cleartext:
             Label("Cleartext", systemImage: "lock.open")
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var encryptionDetail: String? {
+        guard let encryptionStatus else { return nil }
+        switch encryptionStatus {
+        case .requiredUnavailable(let reason):
+            return reason
+        case .decryptionFailed(let reason):
+            return reason
+        case .cleartext, .encrypted:
+            return nil
+        }
+    }
+
+    private var encryptionDetailColor: Color {
+        guard let encryptionStatus else { return .secondary }
+        switch encryptionStatus {
+        case .requiredUnavailable:
+            return .red.opacity(0.9)
+        case .decryptionFailed:
+            return .orange.opacity(0.9)
+        case .cleartext, .encrypted:
+            return .secondary
         }
     }
 
