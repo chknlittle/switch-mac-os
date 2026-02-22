@@ -1017,8 +1017,7 @@ public final class XMPPService: ObservableObject {
 
                 if hasOMEMOPayload {
                     if let omemoModule {
-                        let decodeFrom = fromBare ?? BareJID(threadJid)
-                        switch omemoModule.decode(message: message, from: decodeFrom, serverMsgId: id) {
+                        switch omemoModule.decode(message: message, serverMsgId: id) {
                         case .successMessage(let decodedMessage, _):
                             body = decodedMessage.body ?? body
                             encryption = .decrypted
