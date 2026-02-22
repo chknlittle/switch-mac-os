@@ -48,6 +48,7 @@ private struct DirectoryShellView: View {
                 xmpp: xmpp,
                 composerText: $composerText,
                 pendingImage: $pendingImage,
+                pendingReply: $pendingReply,
                 onSend: {
                     let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
                     if let pending = pendingImage {
@@ -69,8 +70,7 @@ private struct DirectoryShellView: View {
                     composerText = ""
                 },
                 isEnabled: directory.chatTarget != nil,
-                isTyping: isChatTargetTyping,
-                pendingReply: $pendingReply
+                isTyping: isChatTargetTyping
             )
         }
         .onAppear {
