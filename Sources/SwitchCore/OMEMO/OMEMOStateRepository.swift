@@ -388,7 +388,8 @@ protocol OMEMOContextBacked {
 
 extension OMEMOContextBacked {
     var stateRepository: OMEMOStateRepository? {
-        guard let account = context?.sessionObject.userBareJid else { return nil }
+        guard let context else { return nil }
+        let account = context.userBareJid
         return OMEMOStateRepository(account: account)
     }
 }

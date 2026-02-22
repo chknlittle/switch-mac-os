@@ -39,10 +39,11 @@ final class SwitchOMEMOStorage: SignalStorage {
     override func regenerateKeys(wipe: Bool = false) -> Bool {
         guard let context,
               let signalContext,
-              let identityStore = identityKeyStore as? SwitchSignalIdentityKeyStore,
-              let account = context.sessionObject.userBareJid else {
+              let identityStore = identityKeyStore as? SwitchSignalIdentityKeyStore else {
             return false
         }
+
+        let account = context.userBareJid
 
         let repository = OMEMOStateRepository(account: account)
         let hasIdentity = identityStore.keyPair() != nil
