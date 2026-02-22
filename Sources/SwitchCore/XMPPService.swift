@@ -401,6 +401,7 @@ public final class XMPPService: ObservableObject {
     private var cachedUploadComponents: [HttpFileUploadModule.UploadComponent] = []
     private let omemoMarker = "I sent you an OMEMO encrypted message"
     private let omemoRequireMarkedThreads: Bool
+    private var decryptedMessageCache: OMEMODecryptedMessageCache?
 
     /// JIDs currently in "composing" (typing) state
     @Published public private(set) var composingJids: Set<String> = []
@@ -487,6 +488,7 @@ public final class XMPPService: ObservableObject {
         client.streamLogger = debugLogger
         logger.info("Connecting to \(config.xmppHost, privacy: .public):\(config.xmppPort) as \(config.xmppJid, privacy: .public)")
         configureClient(using: config)
+        decryptedMessageCache = OMEMODecryptedMessageCache(account: bareJid(from: config.xmppJid))
         setupOMEMOIfNeeded()
         status = .connecting
         statusText = "Connecting..."
@@ -933,14 +935,29 @@ public final class XMPPService: ObservableObject {
                             body = decodedMessage.body ?? body
                             encryption = .decrypted
                             self.threadEncryptionStatus[from] = .encrypted
+                            if let body, !body.isEmpty {
+                                self.decryptedMessageCache?.save(body: body, for: stableId)
+                            }
                         case .successTransportKey:
-                            encryption = .decryptionFailed
-                            self.threadEncryptionStatus[from] = .decryptionFailed("Message payload missing")
+                            if let cached = self.decryptedMessageCache?.body(for: stableId) {
+                                body = cached
+                                encryption = .decrypted
+                                self.threadEncryptionStatus[from] = .encrypted
+                            } else {
+                                encryption = .decryptionFailed
+                                self.threadEncryptionStatus[from] = .decryptionFailed("Message payload missing")
+                            }
                         case .failure(let err):
-                            encryption = .decryptionFailed
-                            self.threadEncryptionStatus[from] = .decryptionFailed("Decryption failed: \(self.formatOMEMOError(err))")
-                            if body == nil || body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
-                                body = "[Unable to decrypt OMEMO message: \(self.formatOMEMOError(err))]"
+                            if let cached = self.decryptedMessageCache?.body(for: stableId) {
+                                body = cached
+                                encryption = .decrypted
+                                self.threadEncryptionStatus[from] = .encrypted
+                            } else {
+                                encryption = .decryptionFailed
+                                self.threadEncryptionStatus[from] = .decryptionFailed("Decryption failed: \(self.formatOMEMOError(err))")
+                                if body == nil || body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                                    body = "[Unable to decrypt OMEMO message: \(self.formatOMEMOError(err))]"
+                                }
                             }
                         }
                     } else {
@@ -1004,12 +1021,25 @@ public final class XMPPService: ObservableObject {
                         case .successMessage(let decodedMessage, _):
                             body = decodedMessage.body ?? body
                             encryption = .decrypted
+                            if let body, !body.isEmpty {
+                                self.decryptedMessageCache?.save(body: body, for: id)
+                            }
                         case .successTransportKey:
-                            encryption = .decryptionFailed
+                            if let cached = self.decryptedMessageCache?.body(for: id) {
+                                body = cached
+                                encryption = .decrypted
+                            } else {
+                                encryption = .decryptionFailed
+                            }
                         case .failure(let err):
-                            encryption = .decryptionFailed
-                            if body == nil || body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
-                                body = "[Unable to decrypt OMEMO message: \(self.formatOMEMOError(err))]"
+                            if let cached = self.decryptedMessageCache?.body(for: id) {
+                                body = cached
+                                encryption = .decrypted
+                            } else {
+                                encryption = .decryptionFailed
+                                if body == nil || body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                                    body = "[Unable to decrypt OMEMO message: \(self.formatOMEMOError(err))]"
+                                }
                             }
                         }
                     } else {
@@ -1068,5 +1098,13 @@ public final class XMPPService: ObservableObject {
             return short
         }
         return "\(short) [\(detailed)]"
+    }
+
+    private func bareJid(from jid: String) -> String {
+        let trimmed = jid.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let slash = trimmed.firstIndex(of: "/") {
+            return String(trimmed[..<slash])
+        }
+        return trimmed
     }
 }
