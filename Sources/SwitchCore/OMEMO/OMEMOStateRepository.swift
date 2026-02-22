@@ -103,15 +103,15 @@ final class OMEMOStateRepository {
         return readState().identities.first { normalizeAddressName($0.name) == normalized && $0.deviceId == address.deviceId }?.fingerprint
     }
 
-    func identities(for name: String) -> [Identity] {
+    func identities(for name: String) -> [MartinOMEMO.Identity] {
         let normalizedName = normalizeAddressName(name)
-        readState().identities.compactMap { item in
+        return readState().identities.compactMap { item -> MartinOMEMO.Identity? in
             guard normalizeAddressName(item.name) == normalizedName,
                   let status = IdentityStatus(rawValue: item.statusRawValue),
                   let key = Data(base64Encoded: item.keyBase64) else {
                 return nil
             }
-            return Identity(
+            return MartinOMEMO.Identity(
                 address: SignalAddress(name: item.name, deviceId: item.deviceId),
                 status: status,
                 fingerprint: item.fingerprint,
