@@ -204,7 +204,8 @@ private final class PersistedOMEMOBackend {
     }
 
     func loadPreKey(id: UInt32) -> Data? {
-        readState().preKeys[String(id)].flatMap(Data.init(base64Encoded:))
+        guard let value = readState().preKeys[String(id)] else { return nil }
+        return Data(base64Encoded: value)
     }
 
     func storePreKey(id: UInt32, data: Data) -> Bool {
@@ -229,7 +230,8 @@ private final class PersistedOMEMOBackend {
     }
 
     func loadSignedPreKey(id: UInt32) -> Data? {
-        readState().signedPreKeys[String(id)].flatMap(Data.init(base64Encoded:))
+        guard let value = readState().signedPreKeys[String(id)] else { return nil }
+        return Data(base64Encoded: value)
     }
 
     func storeSignedPreKey(id: UInt32, data: Data) -> Bool {
@@ -254,7 +256,8 @@ private final class PersistedOMEMOBackend {
     }
 
     func loadSession(address: SignalAddress) -> Data? {
-        readState().sessions[sessionKey(for: address)].flatMap(Data.init(base64Encoded:))
+        guard let value = readState().sessions[sessionKey(for: address)] else { return nil }
+        return Data(base64Encoded: value)
     }
 
     func storeSession(address: SignalAddress, data: Data) -> Bool {

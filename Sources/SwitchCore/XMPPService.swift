@@ -919,7 +919,7 @@ public final class XMPPService: ObservableObject {
                 }
 
                 let stableId = parseStableMessageId(from: received.message.element) ?? received.message.id
-                var message = received.message
+                let message = received.message
                 var body = message.body
                 var encryption: MessageEncryptionState = .cleartext
 
@@ -979,7 +979,7 @@ public final class XMPPService: ObservableObject {
                     return
                 }
 
-                var message = archived.message
+                let message = archived.message
                 let hasOMEMOPayload = self.hasOMEMOPayload(message.element)
                 if hasOMEMOPayload {
                     self.omemoRequiredThreads.insert(threadJid)
