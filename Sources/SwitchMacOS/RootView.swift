@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CryptoKit
 import Foundation
+import LinkPresentation
 import SwiftUI
 import SwitchCore
 import UniformTypeIdentifiers
@@ -1315,6 +1316,7 @@ private struct ChatPane: View {
 
         var body: some View {
             let inferredImageAttachments = inferredInlineImageAttachments(from: msg.body)
+            let inferredPreviewURL = inferredLinkPreviewURL(from: msg.body)
 
             HStack {
                 if msg.direction == .outgoing {
@@ -1360,6 +1362,10 @@ private struct ChatPane: View {
                     } else
                     if !inferredImageAttachments.isEmpty {
                         AttachmentMessageView(attachments: inferredImageAttachments, bodyText: msg.body, direction: msg.direction)
+                            .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
+                    } else
+                    if let inferredPreviewURL {
+                        LinkPreviewMessageView(url: inferredPreviewURL, bodyText: msg.body, direction: msg.direction)
                             .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
                     } else
                     if isToolMessage {
@@ -1536,6 +1542,30 @@ private struct ChatPane: View {
             }
 
             return attachments
+        }
+
+        private func inferredLinkPreviewURL(from body: String) -> URL? {
+            let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+            let range = NSRange(body.startIndex..., in: body)
+            let matches = detector?.matches(in: body, options: [], range: range) ?? []
+
+            for match in matches {
+                guard let url = match.url else { continue }
+                guard is9GagPreviewURL(url) else { continue }
+                return url
+            }
+
+            return nil
+        }
+
+        private func is9GagPreviewURL(_ url: URL) -> Bool {
+            guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+                return false
+            }
+            guard let host = url.host?.lowercased(), host.hasSuffix("9gag.com") else {
+                return false
+            }
+            return url.path.lowercased().hasPrefix("/gag/")
         }
 
         private func extractAESGCMUrls(from text: String) -> [String] {
@@ -2128,6 +2158,128 @@ private struct ChatPane: View {
                 }
                 return fileURL
             }
+        }
+    }
+
+    private struct LinkPreviewMessageView: View {
+        let url: URL
+        let bodyText: String
+        let direction: ChatMessage.Direction
+
+        var body: some View {
+            VStack(alignment: direction == .incoming ? .leading : .trailing, spacing: 8) {
+                if let caption {
+                    MarkdownMessage(content: caption, xhtmlBody: nil)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(bubbleColor)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(bubbleBorder, lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+
+                LinkPreviewCard(url: url)
+                    .frame(width: 360, height: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.20), lineWidth: 1)
+                    )
+            }
+        }
+
+        private var caption: String? {
+            let trimmed = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            if trimmed == url.absoluteString { return nil }
+            return trimmed
+        }
+
+        private var bubbleColor: Color {
+            switch direction {
+            case .incoming:
+                return Theme.bubbleIncoming
+            case .outgoing:
+                return Theme.bubbleOutgoing
+            }
+        }
+
+        private var bubbleBorder: Color {
+            switch direction {
+            case .incoming:
+                return Theme.border
+            case .outgoing:
+                return Theme.accentStrong
+            }
+        }
+    }
+
+    private struct LinkPreviewCard: View {
+        let url: URL
+        @State private var metadata: LPLinkMetadata? = nil
+        @State private var isLoading: Bool = false
+
+        var body: some View {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.secondary.opacity(0.10))
+
+                if let metadata {
+                    LPLinkViewRepresentable(metadata: metadata)
+                } else if isLoading {
+                    ProgressView()
+                } else {
+                    VStack(spacing: 6) {
+                        Image(systemName: "link")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text(url.absoluteString)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 10)
+                    }
+                }
+            }
+            .task(id: url.absoluteString) {
+                await loadMetadataIfNeeded()
+            }
+        }
+
+        @MainActor
+        private func loadMetadataIfNeeded() async {
+            if metadata != nil || isLoading { return }
+            isLoading = true
+
+            let provider = LPMetadataProvider()
+            provider.timeout = 10
+
+            await withCheckedContinuation { continuation in
+                provider.startFetchingMetadata(for: url) { result, _ in
+                    Task { @MainActor in
+                        metadata = result
+                        isLoading = false
+                        continuation.resume()
+                    }
+                }
+            }
+        }
+    }
+
+    private struct LPLinkViewRepresentable: NSViewRepresentable {
+        let metadata: LPLinkMetadata
+
+        func makeNSView(context: Context) -> LPLinkView {
+            let view = LPLinkView(metadata: metadata)
+            view.translatesAutoresizingMaskIntoConstraints = false
+            return view
+        }
+
+        func updateNSView(_ nsView: LPLinkView, context: Context) {
+            nsView.metadata = metadata
         }
     }
 
