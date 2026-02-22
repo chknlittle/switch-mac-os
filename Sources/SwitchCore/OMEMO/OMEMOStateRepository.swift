@@ -50,6 +50,7 @@ final class OMEMOStateRepository {
 
     init(account: BareJID) {
         self.path = OMEMOPaths.accountStorePath(account: account)
+        normalizeLegacyAddressKeysIfNeeded()
     }
 
     private func readState() -> PersistedOMEMOState {
@@ -98,12 +99,14 @@ final class OMEMOStateRepository {
     }
 
     func identityFingerprint(for address: SignalAddress) -> String? {
-        readState().identities.first { $0.name == address.name && $0.deviceId == address.deviceId }?.fingerprint
+        let normalized = normalizeAddressName(address.name)
+        return readState().identities.first { normalizeAddressName($0.name) == normalized && $0.deviceId == address.deviceId }?.fingerprint
     }
 
     func identities(for name: String) -> [Identity] {
+        let normalizedName = normalizeAddressName(name)
         readState().identities.compactMap { item in
-            guard item.name == name,
+            guard normalizeAddressName(item.name) == normalizedName,
                   let status = IdentityStatus(rawValue: item.statusRawValue),
                   let key = Data(base64Encoded: item.keyBase64) else {
                 return nil
@@ -119,11 +122,13 @@ final class OMEMOStateRepository {
     }
 
     func upsertIdentity(address: SignalAddress, fingerprint: String, keyData: Data, own: Bool) {
+        let normalized = normalizeAddressName(address.name)
         mutate { state in
-            if let idx = state.identities.firstIndex(where: { $0.name == address.name && $0.deviceId == address.deviceId }) {
+            if let idx = state.identities.firstIndex(where: { normalizeAddressName($0.name) == normalized && $0.deviceId == address.deviceId }) {
                 state.identities[idx].fingerprint = fingerprint
                 state.identities[idx].keyBase64 = keyData.base64EncodedString()
                 state.identities[idx].own = own
+                state.identities[idx].name = normalized
                 if state.identities[idx].statusRawValue == IdentityStatus.compromisedActive.rawValue ||
                     state.identities[idx].statusRawValue == IdentityStatus.compromisedInactive.rawValue {
                     state.identities[idx].statusRawValue = IdentityStatus.trustedActive.rawValue
@@ -133,7 +138,7 @@ final class OMEMOStateRepository {
 
             state.identities.append(
                 PersistedIdentity(
-                    name: address.name,
+                    name: normalized,
                     deviceId: address.deviceId,
                     fingerprint: fingerprint,
                     keyBase64: keyData.base64EncodedString(),
@@ -145,9 +150,10 @@ final class OMEMOStateRepository {
     }
 
     func setStatus(_ status: IdentityStatus, for address: SignalAddress) -> Bool {
+        let normalized = normalizeAddressName(address.name)
         var updated = false
         mutate { state in
-            guard let idx = state.identities.firstIndex(where: { $0.name == address.name && $0.deviceId == address.deviceId }) else {
+            guard let idx = state.identities.firstIndex(where: { normalizeAddressName($0.name) == normalized && $0.deviceId == address.deviceId }) else {
                 return
             }
             state.identities[idx].statusRawValue = status.rawValue
@@ -157,9 +163,10 @@ final class OMEMOStateRepository {
     }
 
     func setStatus(active: Bool, for address: SignalAddress) -> Bool {
+        let normalized = normalizeAddressName(address.name)
         var updated = false
         mutate { state in
-            guard let idx = state.identities.firstIndex(where: { $0.name == address.name && $0.deviceId == address.deviceId }) else {
+            guard let idx = state.identities.firstIndex(where: { normalizeAddressName($0.name) == normalized && $0.deviceId == address.deviceId }) else {
                 return
             }
             guard let current = IdentityStatus(rawValue: state.identities[idx].statusRawValue) else { return }
@@ -172,8 +179,9 @@ final class OMEMOStateRepository {
     func isTrusted(address: SignalAddress, publicKeyData: Data?) -> Bool {
         guard let publicKeyData else { return false }
         let fingerprint = fingerprint(publicKey: publicKeyData)
+        let normalized = normalizeAddressName(address.name)
 
-        if let existing = readState().identities.first(where: { $0.name == address.name && $0.deviceId == address.deviceId }) {
+        if let existing = readState().identities.first(where: { normalizeAddressName($0.name) == normalized && $0.deviceId == address.deviceId }) {
             if existing.fingerprint == fingerprint {
                 if let status = IdentityStatus(rawValue: existing.statusRawValue) {
                     return status.trust != .compromised
@@ -239,7 +247,10 @@ final class OMEMOStateRepository {
     }
 
     func loadSession(address: SignalAddress) -> Data? {
-        guard let value = readState().sessions[sessionKey(for: address)] else { return nil }
+        let state = readState()
+        let key = sessionKey(for: address)
+        let legacyKey = legacySessionKey(for: address)
+        guard let value = state.sessions[key] ?? state.sessions[legacyKey] else { return nil }
         return Data(base64Encoded: value)
     }
 
@@ -257,20 +268,26 @@ final class OMEMOStateRepository {
     }
 
     func deleteAllSessions(for name: String) -> Bool {
+        let normalizedName = normalizeAddressName(name)
         var changed = false
         mutate { state in
             let before = state.sessions.count
-            state.sessions = state.sessions.filter { !($0.key.hasPrefix("\(name)|")) }
+            state.sessions = state.sessions.filter {
+                guard let pipe = $0.key.firstIndex(of: "|") else { return true }
+                let rawName = String($0.key[..<pipe])
+                return normalizeAddressName(rawName) != normalizedName
+            }
             changed = before != state.sessions.count
         }
         return changed
     }
 
     func allDevices(for name: String, activeAndTrusted: Bool) -> [Int32] {
+        let normalizedName = normalizeAddressName(name)
         let state = readState()
         let ids: Set<Int32> = Set(state.sessions.keys.compactMap { key in
             let parts = key.split(separator: "|", maxSplits: 1)
-            guard parts.count == 2, String(parts[0]) == name else { return nil }
+            guard parts.count == 2, normalizeAddressName(String(parts[0])) == normalizedName else { return nil }
             return Int32(parts[1])
         })
 
@@ -279,7 +296,7 @@ final class OMEMOStateRepository {
         }
 
         return ids.filter { deviceId in
-            guard let identity = state.identities.first(where: { $0.name == name && $0.deviceId == deviceId }) else {
+            guard let identity = state.identities.first(where: { normalizeAddressName($0.name) == normalizedName && $0.deviceId == deviceId }) else {
                 return true
             }
             guard let status = IdentityStatus(rawValue: identity.statusRawValue) else { return false }
@@ -288,7 +305,17 @@ final class OMEMOStateRepository {
     }
 
     private func sessionKey(for address: SignalAddress) -> String {
+        "\(normalizeAddressName(address.name))|\(address.deviceId)"
+    }
+
+    private func legacySessionKey(for address: SignalAddress) -> String {
         "\(address.name)|\(address.deviceId)"
+    }
+
+    private func normalizeAddressName(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let slash = trimmed.firstIndex(of: "/") else { return trimmed }
+        return String(trimmed[..<slash])
     }
 
     private func fingerprint(publicKey: Data) -> String {
@@ -305,6 +332,53 @@ final class OMEMOStateRepository {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         guard let data = try? JSONEncoder().encode(state) else { return }
         try? data.write(to: path, options: [.atomic])
+    }
+
+    private func normalizeLegacyAddressKeysIfNeeded() {
+        queue.sync {
+            var state = readStateUnlocked()
+            var didChange = false
+
+            var byIdentityKey: [String: PersistedIdentity] = [:]
+            for identity in state.identities {
+                let normalizedName = normalizeAddressName(identity.name)
+                let key = "\(normalizedName)|\(identity.deviceId)"
+                if byIdentityKey[key] == nil {
+                    var normalized = identity
+                    if normalized.name != normalizedName {
+                        normalized.name = normalizedName
+                        didChange = true
+                    }
+                    byIdentityKey[key] = normalized
+                } else {
+                    didChange = true
+                }
+            }
+            state.identities = Array(byIdentityKey.values)
+
+            var normalizedSessions: [String: String] = [:]
+            for (key, value) in state.sessions {
+                let parts = key.split(separator: "|", maxSplits: 1)
+                guard parts.count == 2 else {
+                    normalizedSessions[key] = value
+                    continue
+                }
+                let normalizedName = normalizeAddressName(String(parts[0]))
+                let normalizedKey = "\(normalizedName)|\(parts[1])"
+                if normalizedKey != key {
+                    didChange = true
+                }
+                if normalizedSessions[normalizedKey] == nil {
+                    normalizedSessions[normalizedKey] = value
+                }
+            }
+            state.sessions = normalizedSessions
+
+            if !didChange {
+                return
+            }
+            writeStateUnlocked(state)
+        }
     }
 }
 
