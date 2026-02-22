@@ -12,6 +12,7 @@ private let oobNamespace = "jabber:x:oob"
 private let xhtmlImNamespace = "http://jabber.org/protocol/xhtml-im"
 private let xhtmlNamespace = "http://www.w3.org/1999/xhtml"
 private let sidNamespace = "urn:xmpp:sid:0"
+private let replyNamespace = "urn:xmpp:reply:0"
 
 private func localName(of raw: String) -> String {
     // Handles:
@@ -70,6 +71,15 @@ private func buildOobElement(url: String, desc: String?) -> Element {
         x.addChild(d)
     }
     return x
+}
+
+private func buildReplyElement(_ reply: MessageReplyReference) -> Element {
+    let el = Element(name: "reply", xmlns: replyNamespace)
+    el.attribute("id", newValue: reply.id)
+    if let to = reply.to?.trimmingCharacters(in: .whitespacesAndNewlines), !to.isEmpty {
+        el.attribute("to", newValue: to)
+    }
+    return el
 }
 
 public func buildSwitchMetaElement(type: String, tool: String? = nil, attrs: [String: String] = [:], payloadJson: String? = nil) -> Element {
@@ -224,6 +234,22 @@ public func parseXHTMLBody(from element: Element) -> String? {
       </body>
     </html>
     """
+}
+
+private func parseReplyReference(from element: Element) -> MessageReplyReference? {
+    let replyElement = element.children.first {
+        ($0.xmlns == replyNamespace && localName(of: $0.name) == "reply") ||
+        localName(of: $0.name) == "reply"
+    }
+    guard let replyElement else {
+        return nil
+    }
+
+    guard let id = replyElement.attribute("id")?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
+        return nil
+    }
+    let to = replyElement.attribute("to")?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return MessageReplyReference(id: id, to: to)
 }
 
 private func parseStableMessageId(from element: Element) -> String? {
@@ -445,11 +471,11 @@ public final class XMPPService: ObservableObject {
         _ = client.disconnect()
     }
 
-    public func sendMessage(to bareJid: String, body: String) {
-        sendWireMessage(to: bareJid, wireBody: body, displayBody: body, metaElement: nil, metaForStore: nil)
+    public func sendMessage(to bareJid: String, body: String, replyTo: MessageReplyReference? = nil) {
+        sendWireMessage(to: bareJid, wireBody: body, displayBody: body, replyTo: replyTo, metaElement: nil, metaForStore: nil)
     }
 
-    public func sendImageAttachment(to bareJid: String, data: Data, filename: String, mime: String, caption: String?) {
+    public func sendImageAttachment(to bareJid: String, data: Data, filename: String, mime: String, caption: String?, replyTo: MessageReplyReference? = nil) {
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -481,6 +507,7 @@ public final class XMPPService: ObservableObject {
                     to: bareJid,
                     wireBody: wireBody,
                     displayBody: wireBody,
+                    replyTo: replyTo,
                     metaElement: metaEl,
                     metaForStore: metaForStore,
                     extraElements: [oob]
@@ -507,7 +534,7 @@ public final class XMPPService: ObservableObject {
         )
 
         let metaForStore = MessageMeta(type: .questionReply, tool: "question", runStats: nil, requestId: requestId, question: nil)
-        sendWireMessage(to: bareJid, wireBody: displayText, displayBody: displayText, metaElement: meta, metaForStore: metaForStore)
+        sendWireMessage(to: bareJid, wireBody: displayText, displayBody: displayText, replyTo: nil, metaElement: meta, metaForStore: metaForStore)
     }
 
     public func sendSubagentWork(to subagentJid: String, taskId: String, parentJid: String, body: String) {
@@ -515,10 +542,10 @@ public final class XMPPService: ObservableObject {
         guard let encoded = SubagentWorkCodec.encode(envelope) else {
             return
         }
-        sendWireMessage(to: subagentJid, wireBody: encoded, displayBody: body, metaElement: nil, metaForStore: nil)
+        sendWireMessage(to: subagentJid, wireBody: encoded, displayBody: body, replyTo: nil, metaElement: nil, metaForStore: nil)
     }
 
-    private func sendWireMessage(to bareJid: String, wireBody: String, displayBody: String, metaElement: Element?, metaForStore: MessageMeta?, extraElements: [Element] = []) {
+    private func sendWireMessage(to bareJid: String, wireBody: String, displayBody: String, replyTo: MessageReplyReference?, metaElement: Element?, metaForStore: MessageMeta?, extraElements: [Element] = []) {
         let to = BareJID(bareJid)
         let chat = messageModule.chatManager.createChat(for: client, with: to)
         guard let conversation = chat as? ConversationBase else {
@@ -526,6 +553,9 @@ public final class XMPPService: ObservableObject {
         }
         let id = UUID().uuidString
         let msg = conversation.createMessage(text: wireBody, id: id)
+        if let replyTo {
+            msg.element.addChild(buildReplyElement(replyTo))
+        }
         if let metaElement {
             msg.element.addChild(metaElement)
         }
@@ -534,7 +564,7 @@ public final class XMPPService: ObservableObject {
         }
         conversation.send(message: msg, completionHandler: nil)
 
-        chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, id: msg.id, timestamp: Date(), meta: metaForStore)
+        chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, id: msg.id, timestamp: Date(), meta: metaForStore)
     }
 
     public var pubSubItemsEvents: AnyPublisher<PubSubModule.ItemNotification, Never> {
@@ -808,7 +838,8 @@ public final class XMPPService: ObservableObject {
                 let stableId = parseStableMessageId(from: received.message.element) ?? received.message.id
                 let meta = parseMessageMeta(from: received.message.element)
                 let xhtmlBody = parseXHTMLBody(from: received.message.element)
-                self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, id: stableId, timestamp: received.message.delay?.stamp ?? Date(), meta: meta)
+                let replyTo = parseReplyReference(from: received.message.element)
+                self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, id: stableId, timestamp: received.message.delay?.stamp ?? Date(), meta: meta)
             }
             .store(in: &cancellables)
 
@@ -840,12 +871,13 @@ public final class XMPPService: ObservableObject {
                     ?? "mam:\(archived.messageId)"
                 let meta = parseMessageMeta(from: archived.message.element)
                 let xhtmlBody = parseXHTMLBody(from: archived.message.element)
+                let replyTo = parseReplyReference(from: archived.message.element)
 
                 switch direction {
                 case .incoming:
-                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
+                    self.chatStore.appendIncoming(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
                 case .outgoing:
-                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
+                    self.chatStore.appendOutgoing(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, id: id, timestamp: archived.timestamp, meta: meta, isArchived: true)
                 }
             }
             .store(in: &cancellables)

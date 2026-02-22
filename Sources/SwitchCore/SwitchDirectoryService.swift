@@ -233,7 +233,7 @@ public final class SwitchDirectoryService: ObservableObject {
         beginAwaitingNewSession(dispatcherJid: dispatcherJid)
     }
 
-    public func sendChat(body: String) {
+    public func sendChat(body: String, replyTo: MessageReplyReference? = nil) {
         guard let target = chatTarget else { return }
         let jid = target.jid
 
@@ -243,7 +243,7 @@ public final class SwitchDirectoryService: ObservableObject {
             let parent = lastSelectedIndividualJid ?? xmpp.client.userBareJid.stringValue
             xmpp.sendSubagentWork(to: jid, taskId: taskId, parentJid: parent, body: body)
         case .dispatcher, .individual:
-            xmpp.sendMessage(to: jid, body: body)
+            xmpp.sendMessage(to: jid, body: body, replyTo: replyTo)
         }
 
         if case .dispatcher(let dispatcherJid) = target {
@@ -253,7 +253,7 @@ public final class SwitchDirectoryService: ObservableObject {
         }
     }
 
-    public func sendImageAttachment(data: Data, filename: String, mime: String, caption: String?) {
+    public func sendImageAttachment(data: Data, filename: String, mime: String, caption: String?, replyTo: MessageReplyReference? = nil) {
         guard let target = chatTarget else { return }
         let jid = target.jid
 
@@ -261,7 +261,7 @@ public final class SwitchDirectoryService: ObservableObject {
         case .subagent:
             return
         case .dispatcher, .individual:
-            xmpp.sendImageAttachment(to: jid, data: data, filename: filename, mime: mime, caption: caption)
+            xmpp.sendImageAttachment(to: jid, data: data, filename: filename, mime: mime, caption: caption, replyTo: replyTo)
         }
 
         if case .dispatcher(let dispatcherJid) = target {

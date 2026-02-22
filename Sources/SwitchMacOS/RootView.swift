@@ -32,6 +32,7 @@ private struct DirectoryShellView: View {
     @State private var drafts = ComposerDraftStore()
     @StateObject private var activeThreadMessages = ActiveThreadMessagesModel()
     @State private var pendingImage: PendingImageAttachment? = nil
+    @State private var pendingReply: PendingReplyTarget? = nil
     @State private var composerText: String = ""
 
     var body: some View {
@@ -54,18 +55,22 @@ private struct DirectoryShellView: View {
                             data: pending.data,
                             filename: pending.filename,
                             mime: pending.mime,
-                            caption: trimmed.isEmpty ? nil : trimmed
+                            caption: trimmed.isEmpty ? nil : trimmed,
+                            replyTo: pendingReply?.reference
                         )
                         pendingImage = nil
+                        pendingReply = nil
                         composerText = ""
                         return
                     }
                     guard !trimmed.isEmpty else { return }
-                    directory.sendChat(body: trimmed)
+                    directory.sendChat(body: trimmed, replyTo: pendingReply?.reference)
+                    pendingReply = nil
                     composerText = ""
                 },
                 isEnabled: directory.chatTarget != nil,
-                isTyping: isChatTargetTyping
+                isTyping: isChatTargetTyping,
+                pendingReply: $pendingReply
             )
         }
         .onAppear {
@@ -77,6 +82,7 @@ private struct DirectoryShellView: View {
         .onChange(of: directory.chatTarget?.jid) { newValue in
             chatStore.setActiveThread(newValue)
             activeThreadMessages.setThreadJid(newValue)
+            pendingReply = nil
             loadDraftForActiveThread()
         }
         .onChange(of: composerText) { newValue in
@@ -803,6 +809,39 @@ private struct PendingImageAttachment {
     }
 }
 
+private struct PendingReplyTarget {
+    let reference: MessageReplyReference
+    let preview: String
+    let isIncoming: Bool
+
+    static func from(message: ChatMessage, localBareJid: String) -> PendingReplyTarget {
+        let text = message.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let compact = text.replacingOccurrences(of: "\n", with: " ")
+        let preview: String
+        if compact.isEmpty {
+            preview = "(attachment)"
+        } else if compact.count > 120 {
+            preview = String(compact.prefix(120)) + "..."
+        } else {
+            preview = compact
+        }
+
+        let repliedToJid: String
+        switch message.direction {
+        case .incoming:
+            repliedToJid = message.threadJid
+        case .outgoing:
+            repliedToJid = localBareJid
+        }
+
+        return PendingReplyTarget(
+            reference: MessageReplyReference(id: message.id, to: repliedToJid),
+            preview: preview,
+            isIncoming: message.direction == .incoming
+        )
+    }
+}
+
 private struct PendingImageRow: View {
     let pending: PendingImageAttachment
     let onRemove: () -> Void
@@ -844,6 +883,41 @@ private struct PendingImageRow: View {
     }
 }
 
+private struct PendingReplyRow: View {
+    let reply: PendingReplyTarget
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrowshape.turn.up.left")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(reply.isIncoming ? "Replying to them" : "Replying to you")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                Text(reply.preview)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 0)
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
 private struct ChatPane: View {
     let title: String
     let headerPrompt: String?
@@ -852,6 +926,7 @@ private struct ChatPane: View {
     let xmpp: XMPPService
     @Binding var composerText: String
     @Binding var pendingImage: PendingImageAttachment?
+    @Binding var pendingReply: PendingReplyTarget?
     let onSend: () -> Void
     let isEnabled: Bool
     let isTyping: Bool
@@ -865,6 +940,8 @@ private struct ChatPane: View {
     @State private var isTranscriptMode: Bool = false
 
     var body: some View {
+        let messagesById = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, $0) })
+
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -924,7 +1001,14 @@ private struct ChatPane: View {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
                                 ForEach(messages) { msg in
-                                    MessageRow(msg: msg, xmpp: xmpp)
+                                    MessageRow(
+                                        msg: msg,
+                                        repliedMessage: msg.replyTo.flatMap { messagesById[$0.id] },
+                                        xmpp: xmpp,
+                                        onReply: { tapped in
+                                            pendingReply = PendingReplyTarget.from(message: tapped, localBareJid: xmpp.client.userBareJid.stringValue)
+                                        }
+                                    )
                                         .id(msg.id)
                                 }
                                 Color.clear
@@ -959,6 +1043,12 @@ private struct ChatPane: View {
             Divider()
 
             VStack(spacing: 8) {
+                if let pendingReply {
+                    PendingReplyRow(reply: pendingReply) {
+                        self.pendingReply = nil
+                    }
+                }
+
                 if let pendingImage {
                     PendingImageRow(pending: pendingImage) {
                         self.pendingImage = nil
@@ -1021,6 +1111,7 @@ private struct ChatPane: View {
         }
         .onChange(of: threadJid) { _ in
             pendingImage = nil
+            pendingReply = nil
             isTranscriptMode = false
         }
     }
@@ -1135,19 +1226,44 @@ private struct ChatPane: View {
 
     private struct MessageRow: View {
         let msg: ChatMessage
+        let repliedMessage: ChatMessage?
         let xmpp: XMPPService
+        let onReply: (ChatMessage) -> Void
 
         private var isToolMessage: Bool {
             msg.meta?.isToolRelated ?? false
         }
 
         var body: some View {
+            let inferredImageAttachments = inferredInlineImageAttachments(from: msg.body)
+
             HStack {
                 if msg.direction == .outgoing {
                     Spacer(minLength: 32)
                 }
 
                 VStack(alignment: msg.direction == .incoming ? .leading : .trailing, spacing: 2) {
+                    if let replyLine = replyPreviewLine {
+                        HStack(spacing: 6) {
+                            Rectangle()
+                                .fill(Color.secondary.opacity(0.35))
+                                .frame(width: 2)
+                            Text(replyLine)
+                                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color.secondary.opacity(0.09))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
+                    }
+
                     if msg.direction == .incoming, let q = msg.meta?.question, msg.meta?.type == .question {
                         QuestionCard(envelope: q) { answers, displayText in
                             xmpp.sendQuestionReply(
@@ -1161,6 +1277,10 @@ private struct ChatPane: View {
                     } else
                     if msg.meta?.type == .attachment, let atts = msg.meta?.attachments, !atts.isEmpty {
                         AttachmentMessageView(attachments: atts, bodyText: msg.body, direction: msg.direction)
+                            .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
+                    } else
+                    if !inferredImageAttachments.isEmpty {
+                        AttachmentMessageView(attachments: inferredImageAttachments, bodyText: msg.body, direction: msg.direction)
                             .frame(maxWidth: 520, alignment: msg.direction == .incoming ? .leading : .trailing)
                     } else
                     if isToolMessage {
@@ -1209,6 +1329,38 @@ private struct ChatPane: View {
             }
             .frame(maxWidth: .infinity, alignment: msg.direction == .incoming ? .leading : .trailing)
             .padding(.vertical, 4)
+            .contextMenu {
+                Button("Reply") {
+                    onReply(msg)
+                }
+            }
+        }
+
+        private var replyPreviewLine: String? {
+            guard let reply = msg.replyTo else { return nil }
+
+            let body: String
+            if let repliedMessage {
+                body = repliedMessage.body
+            } else {
+                body = "message unavailable"
+            }
+
+            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            let compact = trimmed.replacingOccurrences(of: "\n", with: " ")
+            let snippet: String
+            if compact.isEmpty {
+                snippet = "(empty message)"
+            } else if compact.count > 92 {
+                snippet = String(compact.prefix(92)) + "..."
+            } else {
+                snippet = compact
+            }
+
+            if let to = reply.to, !to.isEmpty {
+                return "\(to): \(snippet)"
+            }
+            return snippet
         }
 
         private var toolMessageContent: some View {
@@ -1226,6 +1378,59 @@ private struct ChatPane: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .frame(maxWidth: 520, alignment: .leading)
+        }
+
+        private func inferredInlineImageAttachments(from body: String) -> [SwitchAttachment] {
+            let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+            let range = NSRange(body.startIndex..., in: body)
+            let matches = detector?.matches(in: body, options: [], range: range) ?? []
+
+            var attachments: [SwitchAttachment] = []
+            var seenUrls: Set<String> = []
+
+            for match in matches {
+                guard let url = match.url else { continue }
+                guard isInlineRenderableImageURL(url) else { continue }
+
+                let key = url.absoluteString
+                if seenUrls.contains(key) { continue }
+                seenUrls.insert(key)
+
+                let filename = url.lastPathComponent.isEmpty ? nil : url.lastPathComponent
+                let mime: String?
+                if let type = UTType(filenameExtension: url.pathExtension) {
+                    mime = type.preferredMIMEType
+                } else {
+                    mime = nil
+                }
+
+                attachments.append(
+                    SwitchAttachment(
+                        id: "inline-url:\(key)",
+                        kind: "image",
+                        mime: mime,
+                        publicUrl: key,
+                        filename: filename
+                    )
+                )
+            }
+
+            return attachments
+        }
+
+        private func isInlineRenderableImageURL(_ url: URL) -> Bool {
+            guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" || scheme == "file" else {
+                return false
+            }
+
+            let ext = url.pathExtension.lowercased()
+            guard !ext.isEmpty else { return false }
+
+            if let type = UTType(filenameExtension: ext) {
+                return type.conforms(to: .image)
+            }
+
+            return false
         }
 
         @ViewBuilder
