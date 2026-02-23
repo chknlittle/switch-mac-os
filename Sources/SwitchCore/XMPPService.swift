@@ -602,6 +602,7 @@ public final class XMPPService: ObservableObject {
                     case .successMessage(let encrypted, _):
                         conversation.send(message: encrypted, completionHandler: nil)
                         self.threadEncryptionStatus[bareJid] = .encrypted
+                        self.saveDecryptedBody(displayBody, for: [id, encrypted.id])
                         self.chatStore.appendOutgoing(
                             threadJid: bareJid,
                             body: displayBody,
@@ -924,8 +925,8 @@ public final class XMPPService: ObservableObject {
                 }
 
                 let stableId = parseStableMessageId(from: received.message.element) ?? received.message.id
-                let messageCacheId = stableId ?? ""
                 let message = received.message
+                let messageCacheKeys = self.omemoCacheKeys(for: message)
                 var body = message.body
                 var encryption: MessageEncryptionState = .cleartext
 
@@ -936,11 +937,11 @@ public final class XMPPService: ObservableObject {
                             body = decodedMessage.body ?? body
                             encryption = .decrypted
                             self.threadEncryptionStatus[from] = .encrypted
-                            if let body, !body.isEmpty, !messageCacheId.isEmpty {
-                                self.decryptedMessageCache?.save(body: body, for: messageCacheId)
+                            if let body {
+                                self.saveDecryptedBody(body, for: messageCacheKeys)
                             }
                         case .successTransportKey:
-                            if !messageCacheId.isEmpty, let cached = self.decryptedMessageCache?.body(for: messageCacheId) {
+                            if let cached = self.cachedDecryptedBody(for: messageCacheKeys) {
                                 body = cached
                                 encryption = .decrypted
                                 self.threadEncryptionStatus[from] = .encrypted
@@ -949,7 +950,7 @@ public final class XMPPService: ObservableObject {
                                 self.threadEncryptionStatus[from] = .decryptionFailed("Message payload missing")
                             }
                         case .failure(let err):
-                            if !messageCacheId.isEmpty, let cached = self.decryptedMessageCache?.body(for: messageCacheId) {
+                            if let cached = self.cachedDecryptedBody(for: messageCacheKeys) {
                                 body = cached
                                 encryption = .decrypted
                                 self.threadEncryptionStatus[from] = .encrypted
@@ -978,7 +979,7 @@ public final class XMPPService: ObservableObject {
                 let meta = parseMessageMeta(from: message.element)
                 let xhtmlBody = parseXHTMLBody(from: message.element)
                 let replyTo = parseReplyReference(from: message.element)
-                self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, encryption: encryption, id: stableId, timestamp: message.delay?.stamp ?? Date(), meta: meta)
+                self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, encryption: encryption, id: stableId ?? message.id, timestamp: message.delay?.stamp ?? Date(), meta: meta)
             }
             .store(in: &cancellables)
 
@@ -1009,9 +1010,8 @@ public final class XMPPService: ObservableObject {
                 let localBare = self.client.userBareJid
                 let fromBare = archived.message.from?.bareJid
                 let direction: ChatMessage.Direction = (fromBare == localBare) ? .outgoing : .incoming
-                let id = parseStableMessageId(from: archived.message.element)
-                    ?? archived.message.id
-                    ?? "mam:\(archived.messageId)"
+                let messageCacheKeys = self.omemoCacheKeys(for: message, mamMessageId: archived.messageId)
+                let id = messageCacheKeys.first ?? "mam:\(archived.messageId)"
                 var body = message.body
                 var encryption: MessageEncryptionState = .cleartext
 
@@ -1022,17 +1022,17 @@ public final class XMPPService: ObservableObject {
                             body = decodedMessage.body ?? body
                             encryption = .decrypted
                             if let body, !body.isEmpty {
-                                self.decryptedMessageCache?.save(body: body, for: id)
+                                self.saveDecryptedBody(body, for: messageCacheKeys)
                             }
                         case .successTransportKey:
-                            if let cached = self.decryptedMessageCache?.body(for: id) {
+                            if let cached = self.cachedDecryptedBody(for: messageCacheKeys) {
                                 body = cached
                                 encryption = .decrypted
                             } else {
                                 encryption = .decryptionFailed
                             }
                         case .failure(let err):
-                            if let cached = self.decryptedMessageCache?.body(for: id) {
+                            if let cached = self.cachedDecryptedBody(for: messageCacheKeys) {
                                 body = cached
                                 encryption = .decrypted
                             } else {
@@ -1098,6 +1098,40 @@ public final class XMPPService: ObservableObject {
             return short
         }
         return "\(short) [\(detailed)]"
+    }
+
+    private func omemoCacheKeys(for message: Message, mamMessageId: String? = nil) -> [String] {
+        var keys: [String] = []
+
+        func appendKey(_ raw: String?) {
+            guard let raw else { return }
+            let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, !keys.contains(key) else { return }
+            keys.append(key)
+        }
+
+        appendKey(parseStableMessageId(from: message.element))
+        appendKey(message.id)
+        if let mamMessageId {
+            appendKey("mam:\(mamMessageId)")
+        }
+        return keys
+    }
+
+    private func cachedDecryptedBody(for keys: [String]) -> String? {
+        for key in keys {
+            if let body = decryptedMessageCache?.body(for: key) {
+                return body
+            }
+        }
+        return nil
+    }
+
+    private func saveDecryptedBody(_ body: String, for keys: [String]) {
+        guard !body.isEmpty else { return }
+        for key in keys {
+            decryptedMessageCache?.save(body: body, for: key)
+        }
     }
 
     private func bareJid(from jid: String) -> String {
