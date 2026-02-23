@@ -357,6 +357,7 @@ public final class XMPPService: ObservableObject {
     @Published public private(set) var omemoRequiredThreads: Set<String> = []
 
     private let messageModule: MessageModule
+    private let messageCarbonsModule: MessageCarbonsModule
     private let pubSubModule: PubSubModule
     private let mamModule: MessageArchiveManagementModule
     private let chatStateModule: ChatStateNotificationsModule
@@ -402,6 +403,7 @@ public final class XMPPService: ObservableObject {
     private let omemoMarker = "I sent you an OMEMO encrypted message"
     private let omemoRequireMarkedThreads: Bool
     private var decryptedMessageCache: OMEMODecryptedMessageCache?
+    private var carbonsEnabledForConnection = false
 
     /// JIDs currently in "composing" (typing) state
     @Published public private(set) var composingJids: Set<String> = []
@@ -409,6 +411,7 @@ public final class XMPPService: ObservableObject {
     public init() {
         let chatManager = DefaultChatManager(store: DefaultChatStore())
         self.messageModule = MessageModule(chatManager: chatManager)
+        self.messageCarbonsModule = MessageCarbonsModule()
         self.pubSubModule = PubSubModule()
         self.mamModule = MessageArchiveManagementModule()
         self.chatStateModule = ChatStateNotificationsModule()
@@ -818,6 +821,7 @@ public final class XMPPService: ObservableObject {
         client.modulesManager.register(CapabilitiesModule())
         client.modulesManager.register(mamModule)
         client.modulesManager.register(messageModule)
+        client.modulesManager.register(messageCarbonsModule)
         client.modulesManager.register(pubSubModule)
         client.modulesManager.register(chatStateModule)
         client.modulesManager.register(httpUploadModule)
@@ -880,6 +884,17 @@ public final class XMPPService: ObservableObject {
                 if state == .connected() {
                     self.status = .connected
                     self.statusText = "Connected"
+                    if !self.carbonsEnabledForConnection {
+                        self.carbonsEnabledForConnection = true
+                        self.messageCarbonsModule.enable { result in
+                            switch result {
+                            case .success:
+                                logger.info("Message carbons enabled")
+                            case .failure(let err):
+                                logger.notice("Message carbons enable failed: \(String(describing: err), privacy: .public)")
+                            }
+                        }
+                    }
                 } else if state == .connecting {
                     self.status = .connecting
                     self.statusText = "Connecting..."
@@ -887,6 +902,7 @@ public final class XMPPService: ObservableObject {
                     logger.error("Disconnected: \(String(describing: reason), privacy: .public)")
                     self.status = .disconnected
                     self.statusText = "Disconnected (\(String(describing: reason)))"
+                    self.carbonsEnabledForConnection = false
                 } else {
                     self.statusText = String(describing: state)
                 }
@@ -983,6 +999,13 @@ public final class XMPPService: ObservableObject {
             }
             .store(in: &cancellables)
 
+        messageCarbonsModule.carbonsPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] carbon in
+                self?.handleMessageCarbon(carbon)
+            }
+            .store(in: &cancellables)
+
         mamModule.archivedMessagesPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] archived in
@@ -1061,6 +1084,70 @@ public final class XMPPService: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+    }
+
+    private func handleMessageCarbon(_ carbon: MessageCarbonsModule.CarbonReceived) {
+        let message = carbon.message
+        let threadJid = carbon.jid.bareJid.stringValue
+        guard !threadJid.isEmpty else { return }
+
+        let hasOMEMOPayload = hasOMEMOPayload(message.element)
+        if hasOMEMOPayload {
+            omemoRequiredThreads.insert(threadJid)
+        }
+
+        let stableId = parseStableMessageId(from: message.element) ?? message.id
+        let messageCacheKeys = omemoCacheKeys(for: message)
+        var body = message.body
+        var encryption: MessageEncryptionState = .cleartext
+
+        if hasOMEMOPayload {
+            if let omemoModule {
+                switch omemoModule.decode(message: message, serverMsgId: stableId) {
+                case .successMessage(let decodedMessage, _):
+                    body = decodedMessage.body ?? body
+                    encryption = .decrypted
+                    if let body {
+                        saveDecryptedBody(body, for: messageCacheKeys)
+                    }
+                case .successTransportKey:
+                    if let cached = cachedDecryptedBody(for: messageCacheKeys) {
+                        body = cached
+                        encryption = .decrypted
+                    } else {
+                        encryption = .decryptionFailed
+                    }
+                case .failure(let err):
+                    if let cached = cachedDecryptedBody(for: messageCacheKeys) {
+                        body = cached
+                        encryption = .decrypted
+                    } else {
+                        encryption = .decryptionFailed
+                        if body == nil || body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                            body = "[Unable to decrypt OMEMO message: \(formatOMEMOError(err))]"
+                        }
+                    }
+                }
+            } else {
+                encryption = .decryptionFailed
+            }
+        }
+
+        guard let body, !body.isEmpty else { return }
+
+        let meta = parseMessageMeta(from: message.element)
+        let xhtmlBody = parseXHTMLBody(from: message.element)
+        let replyTo = parseReplyReference(from: message.element)
+        let timestamp = message.delay?.stamp ?? Date()
+        let messageId = stableId ?? message.id
+
+        switch carbon.action {
+        case .sent:
+            chatStore.appendOutgoing(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, encryption: encryption, id: messageId, timestamp: timestamp, meta: meta)
+        case .received:
+            composingJids.remove(threadJid)
+            chatStore.appendIncoming(threadJid: threadJid, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, encryption: encryption, id: messageId, timestamp: timestamp, meta: meta)
+        }
     }
 
     public func encryptionStatus(for threadJid: String?) -> ThreadEncryptionStatus? {
