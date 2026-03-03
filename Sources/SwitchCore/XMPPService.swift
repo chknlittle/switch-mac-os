@@ -605,7 +605,7 @@ public final class XMPPService: ObservableObject {
                     case .successMessage(let encrypted, _):
                         conversation.send(message: encrypted, completionHandler: nil)
                         self.threadEncryptionStatus[bareJid] = .encrypted
-                        self.saveDecryptedBody(displayBody, for: [id, encrypted.id])
+                        self.saveDecryptedBody(displayBody, for: [id, encrypted.id].compactMap { $0 })
                         self.chatStore.appendOutgoing(
                             threadJid: bareJid,
                             body: displayBody,
