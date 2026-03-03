@@ -233,7 +233,7 @@ public final class SwitchDirectoryService: ObservableObject {
         beginAwaitingNewSession(dispatcherJid: dispatcherJid)
     }
 
-    public func sendChat(body: String, replyTo: MessageReplyReference? = nil) {
+    public func sendChat(body: String, replyTo: MessageReplyReference? = nil, correctionTo: MessageCorrectionReference? = nil) {
         guard let target = chatTarget else { return }
         let jid = target.jid
 
@@ -243,13 +243,35 @@ public final class SwitchDirectoryService: ObservableObject {
             let parent = lastSelectedIndividualJid ?? xmpp.client.userBareJid.stringValue
             xmpp.sendSubagentWork(to: jid, taskId: taskId, parentJid: parent, body: body)
         case .dispatcher, .individual:
-            xmpp.sendMessage(to: jid, body: body, replyTo: replyTo)
+            xmpp.sendMessage(to: jid, body: body, replyTo: replyTo, correctionTo: correctionTo)
         }
 
         if case .dispatcher(let dispatcherJid) = target {
             if selectedDispatcherJid == dispatcherJid, !directDispatchers.contains(dispatcherJid) {
                 beginAwaitingNewSession(dispatcherJid: dispatcherJid)
             }
+        }
+    }
+
+    public func forwardMessage(_ body: String, to dispatcherJid: String) {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let dispatcher = dispatchers.first(where: { $0.jid == dispatcherJid }) else { return }
+
+        if selectedDispatcherJid != dispatcherJid {
+            selectDispatcher(dispatcher)
+        } else {
+            selectedSessionJid = nil
+            chatTarget = .dispatcher(dispatcherJid)
+            lastSelectedIndividualJid = nil
+            clearAwaitingNewSession()
+            xmpp.ensureHistoryLoaded(with: dispatcherJid)
+        }
+
+        xmpp.sendMessage(to: dispatcherJid, body: trimmed)
+
+        if !directDispatchers.contains(dispatcherJid) {
+            beginAwaitingNewSession(dispatcherJid: dispatcherJid)
         }
     }
 

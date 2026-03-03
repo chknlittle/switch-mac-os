@@ -35,6 +35,7 @@ private struct DirectoryShellView: View {
     @StateObject private var activeThreadMessages = ActiveThreadMessagesModel()
     @State private var pendingImage: PendingImageAttachment? = nil
     @State private var pendingReply: PendingReplyTarget? = nil
+    @State private var pendingEdit: PendingEditTarget? = nil
     @State private var composerText: String = ""
 
     var body: some View {
@@ -47,12 +48,22 @@ private struct DirectoryShellView: View {
                 headerPrompt: sessionHeaderPrompt,
                 threadJid: directory.chatTarget?.jid,
                 messages: activeThreadMessages.messages,
+                dispatchers: directory.dispatchers,
+                selectedDispatcherJid: directory.selectedDispatcherJid,
                 xmpp: xmpp,
                 composerText: $composerText,
                 pendingImage: $pendingImage,
                 pendingReply: $pendingReply,
+                pendingEdit: $pendingEdit,
                 onSend: {
                     let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let pendingEdit {
+                        guard !trimmed.isEmpty else { return }
+                        directory.sendChat(body: trimmed, correctionTo: pendingEdit.reference)
+                        pendingEdit = nil
+                        composerText = ""
+                        return
+                    }
                     if let pending = pendingImage {
                         directory.sendImageAttachment(
                             data: pending.data,
@@ -63,17 +74,22 @@ private struct DirectoryShellView: View {
                         )
                         pendingImage = nil
                         pendingReply = nil
+                        pendingEdit = nil
                         composerText = ""
                         return
                     }
                     guard !trimmed.isEmpty else { return }
                     directory.sendChat(body: trimmed, replyTo: pendingReply?.reference)
                     pendingReply = nil
+                    pendingEdit = nil
                     composerText = ""
                 },
                 isEnabled: directory.chatTarget != nil,
                 isTyping: isChatTargetTyping,
-                encryptionStatus: xmpp.encryptionStatus(for: directory.chatTarget?.jid)
+                encryptionStatus: xmpp.encryptionStatus(for: directory.chatTarget?.jid),
+                onForwardToDispatcher: { message, dispatcherJid in
+                    directory.forwardMessage(message.body, to: dispatcherJid)
+                }
             )
         }
         .onAppear {
@@ -86,6 +102,7 @@ private struct DirectoryShellView: View {
             chatStore.setActiveThread(newValue)
             activeThreadMessages.setThreadJid(newValue)
             pendingReply = nil
+            pendingEdit = nil
             loadDraftForActiveThread()
         }
         .onChange(of: composerText) { newValue in
@@ -845,6 +862,29 @@ private struct PendingReplyTarget {
     }
 }
 
+private struct PendingEditTarget {
+    let reference: MessageCorrectionReference
+    let preview: String
+
+    static func from(message: ChatMessage) -> PendingEditTarget {
+        let text = message.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let compact = text.replacingOccurrences(of: "\n", with: " ")
+        let preview: String
+        if compact.isEmpty {
+            preview = "(empty message)"
+        } else if compact.count > 120 {
+            preview = String(compact.prefix(120)) + "..."
+        } else {
+            preview = compact
+        }
+
+        return PendingEditTarget(
+            reference: MessageCorrectionReference(id: message.id),
+            preview: preview
+        )
+    }
+}
+
 private struct PendingImageRow: View {
     let pending: PendingImageAttachment
     let onRemove: () -> Void
@@ -921,19 +961,58 @@ private struct PendingReplyRow: View {
     }
 }
 
+private struct PendingEditRow: View {
+    let edit: PendingEditTarget
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "pencil")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Editing message")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                Text(edit.preview)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 0)
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
 private struct ChatPane: View {
     let title: String
     let headerPrompt: String?
     let threadJid: String?
     let messages: [ChatMessage]
+    let dispatchers: [DirectoryItem]
+    let selectedDispatcherJid: String?
     let xmpp: XMPPService
     @Binding var composerText: String
     @Binding var pendingImage: PendingImageAttachment?
     @Binding var pendingReply: PendingReplyTarget?
+    @Binding var pendingEdit: PendingEditTarget?
     let onSend: () -> Void
     let isEnabled: Bool
     let isTyping: Bool
     let encryptionStatus: XMPPService.ThreadEncryptionStatus?
+    let onForwardToDispatcher: (ChatMessage, String) -> Void
 
     private let bottomAnchorId: String = "__bottom__"
     private let composerMinHeight: CGFloat = 28
@@ -1020,9 +1099,21 @@ private struct ChatPane: View {
                                         msg: msg,
                                         repliedMessage: msg.replyTo.flatMap { messagesById[$0.id] },
                                         showTimestamp: shouldShowTimestamp(for: index),
+                                        dispatchers: dispatchers,
+                                        selectedDispatcherJid: selectedDispatcherJid,
                                         xmpp: xmpp,
                                         onReply: { tapped in
+                                            pendingEdit = nil
                                             pendingReply = PendingReplyTarget.from(message: tapped, localBareJid: xmpp.client.userBareJid.stringValue)
+                                        },
+                                        onEdit: { tapped in
+                                            pendingReply = nil
+                                            pendingImage = nil
+                                            pendingEdit = PendingEditTarget.from(message: tapped)
+                                            composerText = tapped.body
+                                        },
+                                        onForward: { tapped, dispatcherJid in
+                                            onForwardToDispatcher(tapped, dispatcherJid)
                                         }
                                     )
                                         .id(msg.id)
@@ -1062,6 +1153,12 @@ private struct ChatPane: View {
                 if let pendingReply {
                     PendingReplyRow(reply: pendingReply) {
                         self.pendingReply = nil
+                    }
+                }
+
+                if let pendingEdit {
+                    PendingEditRow(edit: pendingEdit) {
+                        self.pendingEdit = nil
                     }
                 }
 
@@ -1128,6 +1225,7 @@ private struct ChatPane: View {
         .onChange(of: threadJid) { _ in
             pendingImage = nil
             pendingReply = nil
+            pendingEdit = nil
             isTranscriptMode = false
         }
     }
@@ -1307,8 +1405,12 @@ private struct ChatPane: View {
         let msg: ChatMessage
         let repliedMessage: ChatMessage?
         let showTimestamp: Bool
+        let dispatchers: [DirectoryItem]
+        let selectedDispatcherJid: String?
         let xmpp: XMPPService
         let onReply: (ChatMessage) -> Void
+        let onEdit: (ChatMessage) -> Void
+        let onForward: (ChatMessage, String) -> Void
 
         private var isToolMessage: Bool {
             msg.meta?.isToolRelated ?? false
@@ -1419,6 +1521,11 @@ private struct ChatPane: View {
                                     .font(.system(size: 10, weight: .regular, design: .default))
                                     .foregroundStyle(.secondary.opacity(0.7))
                             }
+                            if msg.isEdited {
+                                Text("edited")
+                                    .font(.system(size: 10, weight: .regular, design: .default))
+                                    .foregroundStyle(.secondary.opacity(0.7))
+                            }
                         }
                         .padding(.horizontal, 4)
                     }
@@ -1433,6 +1540,32 @@ private struct ChatPane: View {
             .contextMenu {
                 Button("Reply") {
                     onReply(msg)
+                }
+                Menu("Forward") {
+                    if dispatchers.isEmpty {
+                        Text("No dispatchers")
+                    } else {
+                        ForEach(dispatchers) { dispatcher in
+                            Button {
+                                onForward(msg, dispatcher.jid)
+                            } label: {
+                                if dispatcher.jid == selectedDispatcherJid {
+                                    Label(dispatcher.name, systemImage: "checkmark")
+                                } else {
+                                    Text(dispatcher.name)
+                                }
+                            }
+                        }
+                    }
+                }
+                .disabled(!isForwardable)
+                if msg.direction == .outgoing,
+                   msg.meta?.isQuestionRelated != true,
+                   msg.meta?.isAttachmentRelated != true,
+                   !msg.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button("Edit") {
+                        onEdit(msg)
+                    }
                 }
             }
         }
@@ -1462,6 +1595,10 @@ private struct ChatPane: View {
                 return "\(to): \(snippet)"
             }
             return snippet
+        }
+
+        private var isForwardable: Bool {
+            !msg.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
         private var toolMessageContent: some View {
