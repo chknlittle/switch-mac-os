@@ -14,6 +14,7 @@ private let xhtmlImNamespace = "http://jabber.org/protocol/xhtml-im"
 private let xhtmlNamespace = "http://www.w3.org/1999/xhtml"
 private let sidNamespace = "urn:xmpp:sid:0"
 private let replyNamespace = "urn:xmpp:reply:0"
+private let messageCorrectNamespace = "urn:xmpp:message-correct:0"
 private let omemoNamespace = "eu.siacs.conversations.axolotl"
 
 private func localName(of raw: String) -> String {
@@ -81,6 +82,12 @@ private func buildReplyElement(_ reply: MessageReplyReference) -> Element {
     if let to = reply.to?.trimmingCharacters(in: .whitespacesAndNewlines), !to.isEmpty {
         el.attribute("to", newValue: to)
     }
+    return el
+}
+
+private func buildMessageCorrectionElement(_ correction: MessageCorrectionReference) -> Element {
+    let el = Element(name: "replace", xmlns: messageCorrectNamespace)
+    el.attribute("id", newValue: correction.id)
     return el
 }
 
@@ -252,6 +259,21 @@ private func parseReplyReference(from element: Element) -> MessageReplyReference
     }
     let to = replyElement.attribute("to")?.trimmingCharacters(in: .whitespacesAndNewlines)
     return MessageReplyReference(id: id, to: to)
+}
+
+private func parseMessageCorrection(from element: Element) -> MessageCorrectionReference? {
+    let replaceElement = element.children.first {
+        ($0.xmlns == messageCorrectNamespace && localName(of: $0.name) == "replace") ||
+        localName(of: $0.name) == "replace"
+    }
+    guard let replaceElement else {
+        return nil
+    }
+
+    guard let id = replaceElement.attribute("id")?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
+        return nil
+    }
+    return MessageCorrectionReference(id: id)
 }
 
 private func parseStableMessageId(from element: Element) -> String? {
@@ -502,8 +524,8 @@ public final class XMPPService: ObservableObject {
         _ = client.disconnect()
     }
 
-    public func sendMessage(to bareJid: String, body: String, replyTo: MessageReplyReference? = nil) {
-        sendWireMessage(to: bareJid, wireBody: body, displayBody: body, replyTo: replyTo, metaElement: nil, metaForStore: nil)
+    public func sendMessage(to bareJid: String, body: String, replyTo: MessageReplyReference? = nil, correctionTo: MessageCorrectionReference? = nil) {
+        sendWireMessage(to: bareJid, wireBody: body, displayBody: body, replyTo: replyTo, correctionTo: correctionTo, metaElement: nil, metaForStore: nil)
     }
 
     public func sendImageAttachment(to bareJid: String, data: Data, filename: String, mime: String, caption: String?, replyTo: MessageReplyReference? = nil) {
@@ -576,7 +598,7 @@ public final class XMPPService: ObservableObject {
         sendWireMessage(to: subagentJid, wireBody: encoded, displayBody: body, replyTo: nil, metaElement: nil, metaForStore: nil, allowOMEMO: false)
     }
 
-    private func sendWireMessage(to bareJid: String, wireBody: String, displayBody: String, replyTo: MessageReplyReference?, metaElement: Element?, metaForStore: MessageMeta?, extraElements: [Element] = [], allowOMEMO: Bool = true) {
+    private func sendWireMessage(to bareJid: String, wireBody: String, displayBody: String, replyTo: MessageReplyReference?, correctionTo: MessageCorrectionReference? = nil, metaElement: Element?, metaForStore: MessageMeta?, extraElements: [Element] = [], allowOMEMO: Bool = true) {
         let to = BareJID(bareJid)
         let chat = messageModule.chatManager.createChat(for: client, with: to)
         guard let conversation = chat as? ConversationBase else {
@@ -586,6 +608,9 @@ public final class XMPPService: ObservableObject {
         let msg = conversation.createMessage(text: wireBody, id: id)
         if let replyTo {
             msg.element.addChild(buildReplyElement(replyTo))
+        }
+        if let correctionTo {
+            msg.element.addChild(buildMessageCorrectionElement(correctionTo))
         }
         if let metaElement {
             msg.element.addChild(metaElement)
@@ -606,15 +631,39 @@ public final class XMPPService: ObservableObject {
                         conversation.send(message: encrypted, completionHandler: nil)
                         self.threadEncryptionStatus[bareJid] = .encrypted
                         self.saveDecryptedBody(displayBody, for: [id, encrypted.id].compactMap { $0 })
-                        self.chatStore.appendOutgoing(
-                            threadJid: bareJid,
-                            body: displayBody,
-                            replyTo: replyTo,
-                            encryption: .encrypted,
-                            id: encrypted.id,
-                            timestamp: Date(),
-                            meta: metaForStore
-                        )
+                        if let correctionTo {
+                            let applied = self.chatStore.applyCorrection(
+                                threadJid: bareJid,
+                                correctionId: encrypted.id,
+                                targetMessageId: correctionTo.id,
+                                body: displayBody,
+                                encryption: .encrypted,
+                                timestamp: Date(),
+                                meta: metaForStore
+                            )
+                            if !applied {
+                                self.chatStore.appendOutgoing(
+                                    threadJid: bareJid,
+                                    body: displayBody,
+                                    replyTo: replyTo,
+                                    encryption: .encrypted,
+                                    id: encrypted.id,
+                                    timestamp: Date(),
+                                    meta: metaForStore,
+                                    isEdited: true
+                                )
+                            }
+                        } else {
+                            self.chatStore.appendOutgoing(
+                                threadJid: bareJid,
+                                body: displayBody,
+                                replyTo: replyTo,
+                                encryption: .encrypted,
+                                id: encrypted.id,
+                                timestamp: Date(),
+                                meta: metaForStore
+                            )
+                        }
                     case .failure(let err):
                         if requireOMEMO && self.omemoRequireMarkedThreads {
                             self.threadEncryptionStatus[bareJid] = .requiredUnavailable("Encryption unavailable: \(self.formatOMEMOError(err))")
@@ -622,7 +671,22 @@ public final class XMPPService: ObservableObject {
                         }
                         conversation.send(message: msg, completionHandler: nil)
                         self.threadEncryptionStatus[bareJid] = .cleartext
-                        self.chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, encryption: .cleartext, id: msg.id, timestamp: Date(), meta: metaForStore)
+                        if let correctionTo {
+                            let applied = self.chatStore.applyCorrection(
+                                threadJid: bareJid,
+                                correctionId: msg.id,
+                                targetMessageId: correctionTo.id,
+                                body: displayBody,
+                                encryption: .cleartext,
+                                timestamp: Date(),
+                                meta: metaForStore
+                            )
+                            if !applied {
+                                self.chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, encryption: .cleartext, id: msg.id, timestamp: Date(), meta: metaForStore, isEdited: true)
+                            }
+                        } else {
+                            self.chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, encryption: .cleartext, id: msg.id, timestamp: Date(), meta: metaForStore)
+                        }
                     }
                 }
             }
@@ -636,7 +700,22 @@ public final class XMPPService: ObservableObject {
 
         conversation.send(message: msg, completionHandler: nil)
         threadEncryptionStatus[bareJid] = .cleartext
-        chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, encryption: .cleartext, id: msg.id, timestamp: Date(), meta: metaForStore)
+        if let correctionTo {
+            let applied = chatStore.applyCorrection(
+                threadJid: bareJid,
+                correctionId: msg.id,
+                targetMessageId: correctionTo.id,
+                body: displayBody,
+                encryption: .cleartext,
+                timestamp: Date(),
+                meta: metaForStore
+            )
+            if !applied {
+                chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, encryption: .cleartext, id: msg.id, timestamp: Date(), meta: metaForStore, isEdited: true)
+            }
+        } else {
+            chatStore.appendOutgoing(threadJid: bareJid, body: displayBody, replyTo: replyTo, encryption: .cleartext, id: msg.id, timestamp: Date(), meta: metaForStore)
+        }
     }
 
     public var pubSubItemsEvents: AnyPublisher<PubSubModule.ItemNotification, Never> {
@@ -995,6 +1074,22 @@ public final class XMPPService: ObservableObject {
                 let meta = parseMessageMeta(from: message.element)
                 let xhtmlBody = parseXHTMLBody(from: message.element)
                 let replyTo = parseReplyReference(from: message.element)
+                let correction = parseMessageCorrection(from: message.element)
+                if let correction {
+                    let corrected = self.chatStore.applyCorrection(
+                        threadJid: from,
+                        correctionId: stableId ?? message.id,
+                        targetMessageId: correction.id,
+                        body: body,
+                        xhtmlBody: xhtmlBody,
+                        encryption: encryption,
+                        timestamp: message.delay?.stamp ?? Date(),
+                        meta: meta
+                    )
+                    if corrected {
+                        return
+                    }
+                }
                 self.chatStore.appendIncoming(threadJid: from, body: body, xhtmlBody: xhtmlBody, replyTo: replyTo, encryption: encryption, id: stableId ?? message.id, timestamp: message.delay?.stamp ?? Date(), meta: meta)
             }
             .store(in: &cancellables)
@@ -1075,6 +1170,23 @@ public final class XMPPService: ObservableObject {
                 let meta = parseMessageMeta(from: message.element)
                 let xhtmlBody = parseXHTMLBody(from: message.element)
                 let replyTo = parseReplyReference(from: message.element)
+                let correction = parseMessageCorrection(from: message.element)
+
+                if let correction {
+                    let corrected = self.chatStore.applyCorrection(
+                        threadJid: threadJid,
+                        correctionId: id,
+                        targetMessageId: correction.id,
+                        body: body,
+                        xhtmlBody: xhtmlBody,
+                        encryption: encryption,
+                        timestamp: archived.timestamp,
+                        meta: meta
+                    )
+                    if corrected {
+                        return
+                    }
+                }
 
                 switch direction {
                 case .incoming:
@@ -1138,8 +1250,25 @@ public final class XMPPService: ObservableObject {
         let meta = parseMessageMeta(from: message.element)
         let xhtmlBody = parseXHTMLBody(from: message.element)
         let replyTo = parseReplyReference(from: message.element)
+        let correction = parseMessageCorrection(from: message.element)
         let timestamp = message.delay?.stamp ?? Date()
         let messageId = stableId ?? message.id
+
+        if let correction {
+            let corrected = chatStore.applyCorrection(
+                threadJid: threadJid,
+                correctionId: messageId,
+                targetMessageId: correction.id,
+                body: body,
+                xhtmlBody: xhtmlBody,
+                encryption: encryption,
+                timestamp: timestamp,
+                meta: meta
+            )
+            if corrected {
+                return
+            }
+        }
 
         switch carbon.action {
         case .sent:

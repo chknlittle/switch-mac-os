@@ -108,6 +108,14 @@ public struct MessageReplyReference: Hashable, Sendable {
     }
 }
 
+public struct MessageCorrectionReference: Hashable, Sendable {
+    public let id: String
+
+    public init(id: String) {
+        self.id = id
+    }
+}
+
 public enum MessageEncryptionState: String, Hashable, Sendable {
     case cleartext
     case encrypted
@@ -130,8 +138,9 @@ public struct ChatMessage: Identifiable, Hashable, Sendable {
     public let encryption: MessageEncryptionState
     public let timestamp: Date
     public let meta: MessageMeta?
+    public let isEdited: Bool
 
-    public init(id: String, threadJid: String, direction: Direction, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, encryption: MessageEncryptionState = .cleartext, timestamp: Date, meta: MessageMeta? = nil) {
+    public init(id: String, threadJid: String, direction: Direction, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, encryption: MessageEncryptionState = .cleartext, timestamp: Date, meta: MessageMeta? = nil, isEdited: Bool = false) {
         self.id = id
         self.threadJid = threadJid
         self.direction = direction
@@ -141,6 +150,7 @@ public struct ChatMessage: Identifiable, Hashable, Sendable {
         self.encryption = encryption
         self.timestamp = timestamp
         self.meta = meta
+        self.isEdited = isEdited
     }
 }
 
@@ -199,7 +209,7 @@ public final class ChatStore: ObservableObject {
         threads[threadJid] ?? []
     }
 
-    public func appendIncoming(threadJid: String, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, encryption: MessageEncryptionState = .cleartext, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
+    public func appendIncoming(threadJid: String, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, encryption: MessageEncryptionState = .cleartext, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false, isEdited: Bool = false) {
         let msg = ChatMessage(
             id: id ?? UUID().uuidString,
             threadJid: threadJid,
@@ -209,7 +219,8 @@ public final class ChatStore: ObservableObject {
             replyTo: replyTo,
             encryption: encryption,
             timestamp: timestamp,
-            meta: meta
+            meta: meta,
+            isEdited: isEdited
         )
         let inserted = appendIfMissing(msg)
         if inserted && !isArchived {
@@ -221,7 +232,7 @@ public final class ChatStore: ObservableObject {
         }
     }
 
-    public func appendOutgoing(threadJid: String, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, encryption: MessageEncryptionState = .cleartext, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false) {
+    public func appendOutgoing(threadJid: String, body: String, xhtmlBody: String? = nil, replyTo: MessageReplyReference? = nil, encryption: MessageEncryptionState = .cleartext, id: String?, timestamp: Date, meta: MessageMeta? = nil, isArchived: Bool = false, isEdited: Bool = false) {
         let msg = ChatMessage(
             id: id ?? UUID().uuidString,
             threadJid: threadJid,
@@ -231,7 +242,8 @@ public final class ChatStore: ObservableObject {
             replyTo: replyTo,
             encryption: encryption,
             timestamp: timestamp,
-            meta: meta
+            meta: meta,
+            isEdited: isEdited
         )
         let inserted = appendIfMissing(msg)
         if inserted && !isArchived {
@@ -283,5 +295,40 @@ public final class ChatStore: ObservableObject {
         }
 
         return low
+    }
+
+    @discardableResult
+    public func applyCorrection(threadJid: String, correctionId: String?, targetMessageId: String, body: String, xhtmlBody: String? = nil, encryption: MessageEncryptionState, timestamp: Date, meta: MessageMeta? = nil) -> Bool {
+        var arr = threads[threadJid] ?? []
+        guard let index = arr.firstIndex(where: { $0.id == targetMessageId }) else {
+            return false
+        }
+
+        let old = arr[index]
+        let updated = ChatMessage(
+            id: old.id,
+            threadJid: old.threadJid,
+            direction: old.direction,
+            body: body,
+            xhtmlBody: xhtmlBody ?? old.xhtmlBody,
+            replyTo: old.replyTo,
+            encryption: encryption,
+            timestamp: old.timestamp,
+            meta: meta ?? old.meta,
+            isEdited: true
+        )
+
+        arr[index] = updated
+        threads[threadJid] = arr
+
+        if let correctionId {
+            var knownIds = messageIdsByThread[threadJid] ?? []
+            knownIds.insert(correctionId)
+            messageIdsByThread[threadJid] = knownIds
+        }
+
+        noteActivity(threadJid: threadJid, timestamp: timestamp)
+        threadMessagesUpdated.send(threadJid)
+        return true
     }
 }
