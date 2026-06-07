@@ -629,8 +629,17 @@ public final class SwitchDirectoryService: ObservableObject {
     // MARK: - PubSub
 
     private func individualsPubSubNode(for item: DirectoryItem) -> String? {
-        guard let groupLocal = item.individualsPubSubGroupLocal, !groupLocal.isEmpty else { return nil }
+        let groupLocal = item.individualsPubSubGroupLocal ?? inferredIndividualsGroupLocal(for: item)
+        guard let groupLocal, !groupLocal.isEmpty else { return nil }
         return nodes.individuals("\(groupLocal)@\(xmppDomain)")
+    }
+
+    /// Server convention: `sessions-<dispatcher-key>@domain` where key matches JID localpart.
+    private func inferredIndividualsGroupLocal(for item: DirectoryItem) -> String? {
+        guard !item.isDirect else { return nil }
+        let localpart = Self.bareJid(item.jid).split(separator: "@", maxSplits: 1).first.map(String.init) ?? ""
+        guard !localpart.isEmpty else { return nil }
+        return "sessions-\(localpart)"
     }
 
     private func ensureDispatcherPubSub(for item: DirectoryItem) {
