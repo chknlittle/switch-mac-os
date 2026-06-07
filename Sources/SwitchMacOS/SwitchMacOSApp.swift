@@ -31,6 +31,12 @@ struct SwitchMacOSApp: App {
                     // Retain for app lifetime — never uninstalled.
                     Self._hotkeyMonitor = hotkeyMonitor
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    model.xmpp.reconnectIfNeeded(reason: "app became active")
+                }
+                .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+                    model.xmpp.reconnectIfNeeded(reason: "system woke from sleep")
+                }
         }
         .windowStyle(.automatic)
         .commands {

@@ -358,6 +358,20 @@ public final class XMPPService: ObservableObject {
         case error(String)
     }
 
+    private var isConnected: Bool {
+        if case .connected = status {
+            return true
+        }
+        return false
+    }
+
+    private var isConnecting: Bool {
+        if case .connecting = status {
+            return true
+        }
+        return false
+    }
+
     public let chatStore = ChatStore()
     public let client = XMPPClient()
     private let debugLogger = DebugStreamLogger()
@@ -426,6 +440,11 @@ public final class XMPPService: ObservableObject {
     private let omemoRequireMarkedThreads: Bool
     private var decryptedMessageCache: OMEMODecryptedMessageCache?
     private var carbonsEnabledForConnection = false
+    private var currentConfig: AppConfig?
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectAttempt = 0
+    private var allowsAutoReconnect = true
+    private let reconnectDelays: [UInt64] = [1, 2, 5, 10, 30, 60]
 
     /// JIDs currently in "composing" (typing) state
     @Published public private(set) var composingJids: Set<String> = []
@@ -510,6 +529,16 @@ public final class XMPPService: ObservableObject {
     }
 
     public func connect(using config: AppConfig) {
+        currentConfig = config
+        allowsAutoReconnect = true
+        reconnectAttempt = 0
+        reconnectTask?.cancel()
+        reconnectTask = nil
+
+        guard !isConnected, !isConnecting else {
+            return
+        }
+
         client.streamLogger = debugLogger
         logger.info("Connecting to \(config.xmppHost, privacy: .public):\(config.xmppPort) as \(config.xmppJid, privacy: .public)")
         configureClient(using: config)
@@ -521,7 +550,49 @@ public final class XMPPService: ObservableObject {
     }
 
     public func disconnect() {
+        allowsAutoReconnect = false
+        reconnectTask?.cancel()
+        reconnectTask = nil
         _ = client.disconnect()
+    }
+
+    public func reconnectIfNeeded(reason: String) {
+        guard allowsAutoReconnect else { return }
+        guard case .disconnected = status else { return }
+        guard let config = currentConfig else { return }
+
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttempt = 0
+        logger.info("Immediate reconnect requested: \(reason, privacy: .public)")
+        connect(using: config)
+    }
+
+    private func scheduleReconnect(reason: String) {
+        guard allowsAutoReconnect else { return }
+        guard reconnectTask == nil else { return }
+        guard let config = currentConfig else { return }
+
+        let delaySeconds = reconnectDelays[min(reconnectAttempt, reconnectDelays.count - 1)]
+        reconnectAttempt += 1
+        logger.info(
+            "Scheduling reconnect attempt \(self.reconnectAttempt) in \(delaySeconds)s after \(reason, privacy: .public)"
+        )
+
+        reconnectTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.reconnectTask = nil }
+
+            do {
+                try await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
+            } catch {
+                return
+            }
+
+            guard self.allowsAutoReconnect else { return }
+            guard case .disconnected = self.status else { return }
+            self.connect(using: config)
+        }
     }
 
     public func sendMessage(to bareJid: String, body: String, replyTo: MessageReplyReference? = nil, correctionTo: MessageCorrectionReference? = nil) {
@@ -963,6 +1034,9 @@ public final class XMPPService: ObservableObject {
                 if state == .connected() {
                     self.status = .connected
                     self.statusText = "Connected"
+                    self.reconnectAttempt = 0
+                    self.reconnectTask?.cancel()
+                    self.reconnectTask = nil
                     if !self.carbonsEnabledForConnection {
                         self.carbonsEnabledForConnection = true
                         self.messageCarbonsModule.enable { result in
@@ -982,6 +1056,7 @@ public final class XMPPService: ObservableObject {
                     self.status = .disconnected
                     self.statusText = "Disconnected (\(String(describing: reason)))"
                     self.carbonsEnabledForConnection = false
+                    self.scheduleReconnect(reason: String(describing: reason))
                 } else {
                     self.statusText = String(describing: state)
                 }

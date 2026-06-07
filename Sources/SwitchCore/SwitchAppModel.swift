@@ -24,10 +24,10 @@ public final class SwitchAppModel: ObservableObject {
                 )
             }
 
-            // Wait for connected state before refreshing directory
+            // Refresh the directory on initial connect and after reconnects.
             xmpp.$status
-                .first { if case .connected = $0 { return true } else { return false } }
-                .sink { [weak self] _ in
+                .sink { [weak self] status in
+                    guard case .connected = status else { return }
                     self?.directory?.refreshAll()
                 }
                 .store(in: &cancellables)
