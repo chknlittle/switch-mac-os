@@ -12,6 +12,8 @@ public struct DirectoryItem: Identifiable, Hashable, Sendable {
     public let isClosed: Bool
     /// True when this session is a shared room/group chat.
     public let isGroup: Bool
+    /// Legacy pubsub group localpart (`sessions-<key>`) for individuals notifications.
+    public let individualsPubSubGroupLocal: String?
 
     public init(
         jid: String,
@@ -19,7 +21,8 @@ public struct DirectoryItem: Identifiable, Hashable, Sendable {
         isDirect: Bool = false,
         sortOrder: Int = Int.max,
         isClosed: Bool = false,
-        isGroup: Bool = false
+        isGroup: Bool = false,
+        individualsPubSubGroupLocal: String? = nil
     ) {
         self.jid = jid
         self.name = name ?? jid
@@ -28,6 +31,7 @@ public struct DirectoryItem: Identifiable, Hashable, Sendable {
         self.sortOrder = sortOrder
         self.isClosed = isClosed
         self.isGroup = isGroup
+        self.individualsPubSubGroupLocal = individualsPubSubGroupLocal
     }
 }
 

@@ -75,6 +75,10 @@ public final class SwitchDirectoryService: ObservableObject {
     // Dispatchers that are "direct" (no sessions, e.g. external bridges).
     private var directDispatchers: Set<String> = []
 
+    /// Pubsub node for the selected dispatcher's legacy individuals group.
+    private var selectedIndividualsPubSubNode: String? = nil
+
+    private let xmppDomain: String
     private let historyPrefetchLimit: Int
     private let recencyProbeLimit: Int
 
@@ -95,6 +99,8 @@ public final class SwitchDirectoryService: ObservableObject {
         self.pubSubBareJid = pubSubJid.map { JID($0).bareJid }
         self.nodes = nodes
         self.convenienceDispatchers = convenienceDispatchers
+        let userBare = BareJID(xmpp.client.userBareJid.stringValue)
+        self.xmppDomain = userBare.domain
         self.historyPrefetchLimit = Self.envInt("SWITCH_PREFETCH_HISTORY_THREADS", defaultValue: 0, min: 0, max: 50)
         self.recencyProbeLimit = Self.envInt("SWITCH_RECENCY_PROBE_THREADS", defaultValue: 5000, min: 0, max: 5000)
         bindPubSubRefresh()
@@ -130,6 +136,7 @@ public final class SwitchDirectoryService: ObservableObject {
         chatTarget = .dispatcher(item.jid)
         lastSelectedIndividualJid = nil
         clearAwaitingNewSession()
+        selectedIndividualsPubSubNode = individualsPubSubNode(for: item)
 
         // Direct dispatchers (e.g. Acorn) have no sessions — skip loading entirely.
         if item.isDirect {
@@ -161,9 +168,8 @@ public final class SwitchDirectoryService: ObservableObject {
         suppressResortUntil = Date().addingTimeInterval(1.5)
         xmpp.ensureHistoryLoaded(with: item.jid)
 
-        // Subscribe to this dispatcher's sessions node and fetch.
-        let sessionsNode = nodes.sessions(item.jid)
-        ensureSubscribed(to: sessionsNode)
+        // Subscribe to this dispatcher's pubsub nodes and fetch sessions.
+        ensureDispatcherPubSub(for: item)
         refreshSessionsForDispatcher(dispatcherJid: item.jid)
     }
 
@@ -248,6 +254,9 @@ public final class SwitchDirectoryService: ObservableObject {
 
         if case .dispatcher(let dispatcherJid) = target {
             if selectedDispatcherJid == dispatcherJid, !directDispatchers.contains(dispatcherJid) {
+                if let item = dispatchers.first(where: { Self.bareJidsMatch($0.jid, dispatcherJid) }) {
+                    ensureDispatcherPubSub(for: item)
+                }
                 beginAwaitingNewSession(dispatcherJid: dispatcherJid)
             }
         }
@@ -271,6 +280,7 @@ public final class SwitchDirectoryService: ObservableObject {
         xmpp.sendMessage(to: dispatcherJid, body: trimmed)
 
         if !directDispatchers.contains(dispatcherJid) {
+            ensureDispatcherPubSub(for: dispatcher)
             beginAwaitingNewSession(dispatcherJid: dispatcherJid)
         }
     }
@@ -288,6 +298,9 @@ public final class SwitchDirectoryService: ObservableObject {
 
         if case .dispatcher(let dispatcherJid) = target {
             if selectedDispatcherJid == dispatcherJid, !directDispatchers.contains(dispatcherJid) {
+                if let item = dispatchers.first(where: { Self.bareJidsMatch($0.jid, dispatcherJid) }) {
+                    ensureDispatcherPubSub(for: item)
+                }
                 beginAwaitingNewSession(dispatcherJid: dispatcherJid)
             }
         }
@@ -492,8 +505,13 @@ public final class SwitchDirectoryService: ObservableObject {
             isLoadingIndividuals = true
         }
 
-        let node = nodes.sessions(dispatcherJid)
-        ensureSubscribed(to: node)
+        if let item = dispatchers.first(where: { Self.bareJidsMatch($0.jid, dispatcherJid) }) {
+            ensureDispatcherPubSub(for: item)
+        } else {
+            ensureSubscribed(to: nodes.sessions(Self.bareJid(dispatcherJid)))
+        }
+
+        let node = nodes.sessions(Self.bareJid(dispatcherJid))
         queryItems(node: node) { [weak self] items in
             guard let self else { return }
             guard self.individualsRefreshToken == token else { return }
@@ -502,7 +520,7 @@ public final class SwitchDirectoryService: ObservableObject {
         }
     }
 
-    /// Apply a session list (from disco query or fat pubsub notification).
+    /// Apply a session list from a disco#items query.
     private func applySessionsList(_ items: [DirectoryItem], forDispatcher dispatcherJid: String) {
         let sorted = sortByRecency(items)
         sessionsByDispatcher[dispatcherJid] = sorted
@@ -574,7 +592,8 @@ public final class SwitchDirectoryService: ObservableObject {
                             isDirect: isDirect,
                             sortOrder: sortOrder,
                             isClosed: isClosed,
-                            isGroup: isGroup
+                            isGroup: isGroup,
+                            individualsPubSubGroupLocal: self.parseIndividualsGroupLocal(item.node)
                         )
                     }.sorted { $0.sortOrder < $1.sortOrder }
                     assign(mapped)
@@ -609,6 +628,19 @@ public final class SwitchDirectoryService: ObservableObject {
 
     // MARK: - PubSub
 
+    private func individualsPubSubNode(for item: DirectoryItem) -> String? {
+        guard let groupLocal = item.individualsPubSubGroupLocal, !groupLocal.isEmpty else { return nil }
+        return nodes.individuals("\(groupLocal)@\(xmppDomain)")
+    }
+
+    private func ensureDispatcherPubSub(for item: DirectoryItem) {
+        let bareDispatcherJid = Self.bareJid(item.jid)
+        ensureSubscribed(to: nodes.sessions(bareDispatcherJid))
+        if let individualsNode = individualsPubSubNode(for: item) {
+            ensureSubscribed(to: individualsNode)
+        }
+    }
+
     private func ensureSubscribed(to node: String) {
         guard !subscribedNodes.contains(node) else { return }
         guard !pendingSubscriptions.contains(node) else { return }
@@ -616,17 +648,12 @@ public final class SwitchDirectoryService: ObservableObject {
 
         let subscriber = xmpp.client.boundJid ?? JID(xmpp.client.userBareJid)
         let service = pubSubBareJid ?? directoryBareJid
-        xmpp.pubsub().subscribe(at: service, to: node, subscriber: subscriber, with: nil as JabberDataElement?, completionHandler: { [weak self] _ in
+        xmpp.pubsub().subscribe(at: service, to: node, subscriber: subscriber, with: nil as JabberDataElement?, completionHandler: { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
                 self.pendingSubscriptions.remove(node)
-                self.subscribedNodes.insert(node)
-                // Pubsub may have fired before subscription completed; refresh once if waiting.
-                if node.hasPrefix("sessions:"), self.awaitingNewSession {
-                    let dispatcherJid = String(node.dropFirst("sessions:".count))
-                    if self.selectedDispatcherJid == dispatcherJid {
-                        self.refreshSessionsForDispatcher(dispatcherJid: dispatcherJid)
-                    }
+                if case .success = result {
+                    self.subscribedNodes.insert(node)
                 }
             }
         })
@@ -648,15 +675,16 @@ public final class SwitchDirectoryService: ObservableObject {
                 // Pubsub is the push signal; disco#items is the source of truth.
                 if node.hasPrefix("sessions:") {
                     let dispatcherJid = String(node.dropFirst("sessions:".count))
-                    if self.selectedDispatcherJid == dispatcherJid {
-                        self.refreshSessionsForDispatcher(dispatcherJid: dispatcherJid)
+                    if let selected = self.selectedDispatcherJid,
+                       Self.bareJidsMatch(selected, dispatcherJid) {
+                        self.refreshSessionsForDispatcher(dispatcherJid: selected)
                     }
                     return
                 }
 
-                // Legacy individuals: node — refresh sessions for the active dispatcher.
                 if node.hasPrefix("individuals:") {
-                    if let dispatcher = self.selectedDispatcherJid {
+                    if node == self.selectedIndividualsPubSubNode,
+                       let dispatcher = self.selectedDispatcherJid {
                         self.refreshSessionsForDispatcher(dispatcherJid: dispatcher)
                     }
                     return
@@ -681,6 +709,16 @@ public final class SwitchDirectoryService: ObservableObject {
                 self.scheduleResort()
             }
             .store(in: &cancellables)
+    }
+
+    private func parseIndividualsGroupLocal(_ node: String?) -> String? {
+        guard let node, !node.isEmpty else { return nil }
+        let tokens = node.split(separator: ":").map(String.init)
+        guard let markerIndex = tokens.firstIndex(of: "individuals"), markerIndex + 1 < tokens.count else {
+            return nil
+        }
+        let groupLocal = tokens[markerIndex + 1]
+        return groupLocal.isEmpty ? nil : groupLocal
     }
 
     private func parseSortOrder(_ node: String?) -> Int {
@@ -717,6 +755,14 @@ public final class SwitchDirectoryService: ObservableObject {
         let raw = ProcessInfo.processInfo.environment[key] ?? String(defaultValue)
         let parsed = Int(raw) ?? defaultValue
         return Swift.max(min, Swift.min(parsed, max))
+    }
+
+    private static func bareJid(_ jid: String) -> String {
+        jid.split(separator: "/", maxSplits: 1).first.map(String.init) ?? jid
+    }
+
+    private static func bareJidsMatch(_ a: String, _ b: String) -> Bool {
+        bareJid(a).caseInsensitiveCompare(bareJid(b)) == .orderedSame
     }
 
     // MARK: - Sorting
