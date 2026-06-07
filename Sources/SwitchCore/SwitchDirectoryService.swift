@@ -621,8 +621,19 @@ public final class SwitchDirectoryService: ObservableObject {
                 guard let self else { return }
                 self.pendingSubscriptions.remove(node)
                 self.subscribedNodes.insert(node)
+                // Pubsub may have fired before subscription completed; refresh once if waiting.
+                if node.hasPrefix("sessions:"), self.awaitingNewSession {
+                    let dispatcherJid = String(node.dropFirst("sessions:".count))
+                    if self.selectedDispatcherJid == dispatcherJid {
+                        self.refreshSessionsForDispatcher(dispatcherJid: dispatcherJid)
+                    }
+                }
             }
         })
+    }
+
+    private func isTrackingPubSubNode(_ node: String) -> Bool {
+        subscribedNodes.contains(node) || pendingSubscriptions.contains(node)
     }
 
     private func bindPubSubRefresh() {
@@ -630,18 +641,12 @@ public final class SwitchDirectoryService: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] notification in
                 guard let self else { return }
-                guard self.subscribedNodes.contains(notification.node) else { return }
+                guard self.isTrackingPubSubNode(notification.node) else { return }
 
                 let node = notification.node
 
-                // Try to extract a fat sessions payload from the notification.
+                // Pubsub is the push signal; disco#items is the source of truth.
                 if node.hasPrefix("sessions:") {
-                    if let items = self.parseSessionsPayload(notification) {
-                        let dispatcherJid = String(node.dropFirst("sessions:".count))
-                        self.applySessionsList(items, forDispatcher: dispatcherJid)
-                        return
-                    }
-                    // Payload missing or unparseable — fall back to disco query.
                     let dispatcherJid = String(node.dropFirst("sessions:".count))
                     if self.selectedDispatcherJid == dispatcherJid {
                         self.refreshSessionsForDispatcher(dispatcherJid: dispatcherJid)
@@ -676,45 +681,6 @@ public final class SwitchDirectoryService: ObservableObject {
                 self.scheduleResort()
             }
             .store(in: &cancellables)
-    }
-
-    /// Parse a fat pubsub notification: <switch event="sessions"><session jid="..." name="..."/>...</switch>
-    private func parseSessionsPayload(_ notification: PubSubModule.ItemNotification) -> [DirectoryItem]? {
-        guard case .published(let item) = notification.action else { return nil }
-        guard let payload = item.payload else { return nil }
-
-        guard payload.attribute("event") == "sessions" else { return nil }
-
-        var items: [DirectoryItem] = []
-        for child in payload.children where child.name == "session" {
-            guard let jid = child.attribute("jid") else { continue }
-            let name = child.attribute("name")
-            let isClosed = child.attribute("status") == "closed"
-            let isGroup = payloadSessionIsGroup(child, jid: jid)
-            items.append(DirectoryItem(jid: jid, name: name, isClosed: isClosed, isGroup: isGroup))
-        }
-        return items
-    }
-
-    private func payloadSessionIsGroup(_ node: Element, jid: String) -> Bool {
-        let kind = node.attribute("kind")?.lowercased()
-        let type = node.attribute("type")?.lowercased()
-        let chat = node.attribute("chat")?.lowercased()
-        let hasRoomAttr = !(node.attribute("room") ?? "").isEmpty
-        return kind == "group"
-            || type == "group"
-            || type == "groupchat"
-            || chat == "group"
-            || boolAttribute(node.attribute("group"))
-            || hasRoomAttr
-            || isLikelyGroupJid(jid)
-    }
-
-    private func boolAttribute(_ value: String?) -> Bool {
-        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !normalized.isEmpty else {
-            return false
-        }
-        return normalized == "1" || normalized == "true" || normalized == "yes"
     }
 
     private func parseSortOrder(_ node: String?) -> Int {
