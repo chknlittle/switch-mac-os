@@ -1990,7 +1990,7 @@ private struct ChatPane: View {
                     Task {
                         if let existing = aesgcmFileURL {
                             await MainActor.run {
-                                NSWorkspace.shared.open(existing)
+                                _ = NSWorkspace.shared.open(existing)
                             }
                             return
                         }
@@ -2047,7 +2047,7 @@ private struct ChatPane: View {
                     Task {
                         if let file = try? await resolveAESGCMFile(descriptor: descriptor) {
                             await MainActor.run {
-                                NSWorkspace.shared.open(file)
+                                _ = NSWorkspace.shared.open(file)
                             }
                         }
                     }
@@ -2990,7 +2990,11 @@ private struct MarkdownMessage: View, Equatable {
                     continue
                 }
                 let code = String(input[afterOpen..<close])
-                out += makeInlineCodeSpan(code)
+                if code.isEmpty {
+                    out += AttributedString("``")
+                } else {
+                    out += makeInlineCodeSpan(code)
+                }
                 idx = input.index(after: close)
                 continue
             }
@@ -3161,16 +3165,27 @@ private struct MarkdownMessage: View, Equatable {
             blocks.append(MarkdownBlock(kind: .markdown(s)))
         }
 
+        func isFence(_ line: String) -> Bool {
+            line.drop(while: { $0 == " " || $0 == "\t" }).hasPrefix("```")
+        }
+
         var i = 0
         while i < lines.count {
             let line = lines[i]
 
-            if line.hasPrefix("```") {
+            if isFence(line) {
+                // Fences may be indented (e.g. code blocks inside list items);
+                // strip the fence's indent from the block so it renders flush.
+                let fenceIndent = line.prefix(while: { $0 == " " || $0 == "\t" })
                 flushMarkdown()
                 var codeLines: [String] = []
                 i += 1
-                while i < lines.count, !lines[i].hasPrefix("```") {
-                    codeLines.append(lines[i])
+                while i < lines.count, !isFence(lines[i]) {
+                    var code = lines[i]
+                    if code.hasPrefix(fenceIndent) {
+                        code = String(code.dropFirst(fenceIndent.count))
+                    }
+                    codeLines.append(code)
                     i += 1
                 }
                 if i < lines.count {

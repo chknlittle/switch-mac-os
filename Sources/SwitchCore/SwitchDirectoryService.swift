@@ -664,7 +664,7 @@ public final class SwitchDirectoryService: ObservableObject {
 
         let subscriber = xmpp.client.boundJid ?? JID(xmpp.client.userBareJid)
         let service = pubSubBareJid ?? directoryBareJid
-        xmpp.pubsub().subscribe(at: service, to: node, subscriber: subscriber, with: nil as JabberDataElement?, completionHandler: { [weak self] result in
+        xmpp.pubsub().subscribe(at: service, to: node, subscriber: subscriber, with: nil as PubSubSubscribeOptions?, completionHandler: { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
                 self.pendingSubscriptions.remove(node)
