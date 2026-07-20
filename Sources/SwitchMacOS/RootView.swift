@@ -412,6 +412,7 @@ private struct SidebarList: View {
                         .padding(.horizontal, 10)
                         .padding(.top, 6)
                         .padding(.bottom, 10)
+                        .animation(.easeInOut(duration: 0.2), value: directory.dispatchers)
                     }
                 }
             }
@@ -2798,17 +2799,13 @@ private struct ComposerTextView: NSViewRepresentable {
 
 private struct MarkdownMessage: View, Equatable {
     let content: String
+    // The plain body is the original markdown and always the source of truth
+    // (the server derives XHTML from it). Rendering it natively keeps one
+    // consistent pipeline; the XHTML alternative loses tables when bridged
+    // into SwiftUI (NSTextTable is not representable in Text).
     let xhtmlBody: String?
 
     var body: some View {
-        if let xhtmlBody,
-           shouldUseXHTML(xhtmlBody: xhtmlBody, content: content),
-           let rich = htmlText(xhtmlBody) {
-            return messageText(rich)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-        }
-
         let normalized = normalize(content)
 
         // Render as a single Text view so selection can span paragraphs and code blocks.
@@ -2822,6 +2819,8 @@ private struct MarkdownMessage: View, Equatable {
                 combined = combined + markdownText(s)
             case .code(let s):
                 combined = combined + codeBlockText(s)
+            case .table(let headers, let rows):
+                combined = combined + tableText(headers: headers, rows: rows)
             }
             if i != blocks.indices.last {
                 combined = combined + Text("\n\n")
@@ -2830,69 +2829,6 @@ private struct MarkdownMessage: View, Equatable {
         return messageText(combined)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
-    }
-
-    private func htmlText(_ html: String) -> Text? {
-        guard let data = html.data(using: .utf8) else {
-            return nil
-        }
-        let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
-            .documentType: NSAttributedString.DocumentType.html,
-            .characterEncoding: String.Encoding.utf8.rawValue
-        ]
-        guard let ns = try? NSAttributedString(data: data, options: options, documentAttributes: nil) else {
-            return nil
-        }
-
-        let trimmed = trimTrailingNewlines(ns)
-        guard !trimmed.string.isEmpty else {
-            return nil
-        }
-
-        if let attr = try? AttributedString(trimmed, including: \.appKit) {
-            return Text(attr)
-        }
-        return Text(trimmed.string)
-    }
-
-    private func shouldUseXHTML(xhtmlBody: String, content: String) -> Bool {
-        let html = xhtmlBody.lowercased()
-        let contentLooksInlineMarkdown =
-            content.contains("**") ||
-            content.contains("__") ||
-            content.contains("`")
-
-        let xhtmlHasInlineStyling =
-            html.contains("<strong") ||
-            html.contains("<b>") ||
-            html.contains("<em") ||
-            html.contains("<code") ||
-            html.contains("<pre")
-
-        if contentLooksInlineMarkdown && !xhtmlHasInlineStyling {
-            // Prefer markdown rendering when XHTML is only structural and would
-            // otherwise show literal inline markdown markers like **bold** or `code`.
-            return false
-        }
-        return true
-    }
-
-    private func trimTrailingNewlines(_ input: NSAttributedString) -> NSAttributedString {
-        let mutable = NSMutableAttributedString(attributedString: input)
-        let ns = mutable.string as NSString
-        var end = ns.length
-        while end > 0 {
-            let ch = ns.substring(with: NSRange(location: end - 1, length: 1))
-            if ch == "\n" || ch == "\r" {
-                end -= 1
-                continue
-            }
-            break
-        }
-        if end < mutable.length {
-            mutable.deleteCharacters(in: NSRange(location: end, length: mutable.length - end))
-        }
-        return mutable
     }
 
     private func markdownText(_ s: String) -> Text {
@@ -2915,11 +2851,7 @@ private struct MarkdownMessage: View, Equatable {
             } else {
                 // Preserve literal layout (lists/quotes/headings/newlines) instead of letting the
                 // markdown pipeline collapse block separators.
-                if para.contains("`") || para.contains("**") || para.contains("__") {
-                    combined = combined + Text(styleVerbatimInlineMarkup(para))
-                } else {
-                    combined = combined + Text(verbatim: para)
-                }
+                combined = combined + Text(styleBlockLines(para))
             }
             if i != paragraphs.indices.last {
                 combined = combined + Text("\n\n")
@@ -2949,10 +2881,40 @@ private struct MarkdownMessage: View, Equatable {
         return out
     }
 
+    private func makeHeadingSpan(_ s: String, level: Int) -> AttributedString {
+        var out = styleVerbatimInlineMarkup(s)
+        let size: CGFloat = level <= 1 ? 17 : (level == 2 ? 15.5 : 14)
+        out.font = .system(size: size, weight: .bold, design: .rounded)
+        return out
+    }
+
+    /// Style each line of a block-structured paragraph: headings get a larger
+    /// bold font, everything else keeps verbatim layout with inline styling.
+    private func styleBlockLines(_ s: String) -> AttributedString {
+        let lines = s.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var out = AttributedString("")
+        for i in lines.indices {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let hashes = trimmed.prefix(while: { $0 == "#" })
+            if !hashes.isEmpty, hashes.count <= 6, trimmed.dropFirst(hashes.count).hasPrefix(" ") {
+                let title = String(trimmed.dropFirst(hashes.count + 1))
+                out += makeHeadingSpan(title, level: hashes.count)
+            } else {
+                out += styleVerbatimInlineMarkup(line)
+            }
+            if i != lines.indices.last {
+                out += AttributedString("\n")
+            }
+        }
+        return out
+    }
+
     private func styleVerbatimInlineMarkup(_ s: String) -> AttributedString {
         // Render a subset of markdown inline markup while keeping the text verbatim:
         // - `inline code`
         // - **bold** / __bold__
+        // - [label](http…) links
         // This avoids SwiftUI's markdown block rendering which can collapse newlines.
         let input = formatListMarkers(s)
         var out = AttributedString("")
@@ -2968,6 +2930,7 @@ private struct MarkdownMessage: View, Equatable {
             let nextBacktick = input[idx...].firstIndex(of: "`")
             let nextBoldA = input[idx...].range(of: "**")?.lowerBound
             let nextBoldB = input[idx...].range(of: "__")?.lowerBound
+            let nextBracket = input[idx...].firstIndex(of: "[")
 
             // Pick earliest delimiter.
             var next = nextBacktick
@@ -2984,6 +2947,12 @@ private struct MarkdownMessage: View, Equatable {
                     kind = "bold__"
                 }
             }
+            if let l = nextBracket {
+                if next == nil || l < next! {
+                    next = l
+                    kind = "link"
+                }
+            }
 
             guard let open = next else {
                 appendLiteral(idx, input.endIndex)
@@ -2991,6 +2960,27 @@ private struct MarkdownMessage: View, Equatable {
             }
 
             appendLiteral(idx, open)
+
+            if kind == "link" {
+                let afterOpen = input.index(after: open)
+                if let closeBracket = input[afterOpen...].range(of: "]("),
+                   let closeParen = input[closeBracket.upperBound...].firstIndex(of: ")") {
+                    let label = String(input[afterOpen..<closeBracket.lowerBound])
+                    let urlString = String(input[closeBracket.upperBound..<closeParen])
+                    if urlString.hasPrefix("http"), let url = URL(string: urlString), !label.isEmpty {
+                        var span = AttributedString(label)
+                        span.link = url
+                        span.foregroundColor = Color.accentColor
+                        span.underlineStyle = .single
+                        out += span
+                        idx = input.index(after: closeParen)
+                        continue
+                    }
+                }
+                out += AttributedString("[")
+                idx = afterOpen
+                continue
+            }
 
             if kind == "code" {
                 let afterOpen = input.index(after: open)
@@ -3152,14 +3142,15 @@ private struct MarkdownMessage: View, Equatable {
         enum Kind {
             case markdown(String)
             case code(String)
+            case table(headers: [String], rows: [[String]])
         }
         let kind: Kind
     }
 
     private func parseMarkdownBlocks(_ text: String) -> [MarkdownBlock] {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var blocks: [MarkdownBlock] = []
         var current: [String] = []
-        var inCode = false
 
         func flushMarkdown() {
             let s = current.joined(separator: "\n")
@@ -3170,37 +3161,128 @@ private struct MarkdownMessage: View, Equatable {
             blocks.append(MarkdownBlock(kind: .markdown(s)))
         }
 
-        func flushCode() {
-            let s = current.joined(separator: "\n")
-            current.removeAll(keepingCapacity: true)
-            blocks.append(MarkdownBlock(kind: .code(s)))
-        }
+        var i = 0
+        while i < lines.count {
+            let line = lines[i]
 
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
             if line.hasPrefix("```") {
-                if inCode {
-                    flushCode()
-                    inCode = false
-                } else {
-                    flushMarkdown()
-                    inCode = true
+                flushMarkdown()
+                var codeLines: [String] = []
+                i += 1
+                while i < lines.count, !lines[i].hasPrefix("```") {
+                    codeLines.append(lines[i])
+                    i += 1
                 }
+                if i < lines.count {
+                    i += 1 // closing fence
+                }
+                blocks.append(MarkdownBlock(kind: .code(codeLines.joined(separator: "\n"))))
                 continue
             }
-            current.append(line)
-        }
 
-        if inCode {
-            flushCode()
-        } else {
-            flushMarkdown()
+            if i + 1 < lines.count, isTableRow(line), isTableSeparator(lines[i + 1]) {
+                flushMarkdown()
+                let headers = parseTableRow(line)
+                i += 2
+                var rows: [[String]] = []
+                while i < lines.count, isTableRow(lines[i]) {
+                    rows.append(parseTableRow(lines[i]))
+                    i += 1
+                }
+                blocks.append(MarkdownBlock(kind: .table(headers: headers, rows: rows)))
+                continue
+            }
+
+            current.append(line)
+            i += 1
         }
+        flushMarkdown()
 
         if blocks.isEmpty {
             blocks.append(MarkdownBlock(kind: .markdown(text)))
         }
 
         return blocks
+    }
+
+    // MARK: - Tables
+
+    private func isTableRow(_ line: String) -> Bool {
+        let stripped = line.trimmingCharacters(in: .whitespaces)
+        guard stripped.contains("|") else { return false }
+        return parseTableRow(stripped).count >= 2
+    }
+
+    private func isTableSeparator(_ line: String) -> Bool {
+        // e.g. "| --- | :---: | ---: |"
+        let stripped = line.trimmingCharacters(in: .whitespaces)
+        guard stripped.contains("-"), stripped.contains("|") else { return false }
+        return stripped.allSatisfy { "|-: \t".contains($0) }
+    }
+
+    private func parseTableRow(_ line: String) -> [String] {
+        var s = line.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("|") { s = String(s.dropFirst()) }
+        if s.hasSuffix("|") { s = String(s.dropLast()) }
+        return s.split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    private func tableText(headers: [String], rows: [[String]]) -> Text {
+        // SwiftUI Text cannot lay out real table cells, so render an aligned
+        // monospaced grid. Inline markers are stripped so the padding math
+        // matches what is displayed.
+        let headerCells = headers.map(plainInlineText)
+        let bodyRows = rows.map { $0.map(plainInlineText) }
+        let columns = max(headerCells.count, bodyRows.map(\.count).max() ?? 0)
+        guard columns > 0 else { return Text("") }
+
+        var widths = [Int](repeating: 0, count: columns)
+        func measure(_ row: [String]) {
+            for (i, cell) in row.enumerated() where i < columns {
+                widths[i] = max(widths[i], cell.count)
+            }
+        }
+        measure(headerCells)
+        bodyRows.forEach(measure)
+
+        func gridLine(_ row: [String]) -> String {
+            (0..<columns).map { i -> String in
+                let cell = i < row.count ? row[i] : ""
+                if i == columns - 1 { return cell } // no trailing padding
+                return cell + String(repeating: " ", count: max(0, widths[i] - cell.count))
+            }
+            .joined(separator: "  ")
+        }
+
+        let mono = Font.system(size: 12, weight: .regular, design: .monospaced)
+        var out = AttributedString("")
+
+        var header = AttributedString(gridLine(headerCells))
+        header.font = .system(size: 12, weight: .bold, design: .monospaced)
+        out += header
+
+        out += AttributedString("\n")
+        var rule = AttributedString(widths.map { String(repeating: "\u{2500}", count: $0) }.joined(separator: "  "))
+        rule.font = mono
+        rule.foregroundColor = Color.secondary
+        out += rule
+
+        for row in bodyRows {
+            out += AttributedString("\n")
+            var r = AttributedString(gridLine(row))
+            r.font = mono
+            out += r
+        }
+        return Text(out)
+    }
+
+    /// Visible text of a table cell: inline markers stripped so column widths
+    /// are computed on what the user actually sees.
+    private func plainInlineText(_ s: String) -> String {
+        s.replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .replacingOccurrences(of: "`", with: "")
     }
 }
 
