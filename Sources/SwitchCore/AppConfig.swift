@@ -8,7 +8,6 @@ public struct AppConfig: Sendable {
     public let switchDirectoryJid: String?
     public let switchPubSubJid: String?
     public let switchConvenienceDispatchers: [DirectoryItem]
-    public let switchDispatcherHotkeyTargets: [Int: String]
 
     public init(
         xmppHost: String,
@@ -17,8 +16,7 @@ public struct AppConfig: Sendable {
         xmppPassword: String,
         switchDirectoryJid: String?,
         switchPubSubJid: String?,
-        switchConvenienceDispatchers: [DirectoryItem],
-        switchDispatcherHotkeyTargets: [Int: String]
+        switchConvenienceDispatchers: [DirectoryItem]
     ) {
         self.xmppHost = xmppHost
         self.xmppPort = xmppPort
@@ -27,7 +25,6 @@ public struct AppConfig: Sendable {
         self.switchDirectoryJid = switchDirectoryJid
         self.switchPubSubJid = switchPubSubJid
         self.switchConvenienceDispatchers = switchConvenienceDispatchers
-        self.switchDispatcherHotkeyTargets = switchDispatcherHotkeyTargets
     }
 
     public static func load() throws -> AppConfig {
@@ -53,7 +50,6 @@ public struct AppConfig: Sendable {
         let convenienceDispatchers = parseConvenienceDispatchers(
             env["SWITCH_CONVENIENCE_DISPATCHERS"]
         )
-        let dispatcherHotkeys = parseDispatcherHotkeys(env)
 
         return AppConfig(
             xmppHost: host,
@@ -62,21 +58,8 @@ public struct AppConfig: Sendable {
             xmppPassword: password,
             switchDirectoryJid: directoryJid,
             switchPubSubJid: pubsubJid,
-            switchConvenienceDispatchers: convenienceDispatchers,
-            switchDispatcherHotkeyTargets: dispatcherHotkeys
+            switchConvenienceDispatchers: convenienceDispatchers
         )
-    }
-
-    private static func parseDispatcherHotkeys(_ env: [String: String]) -> [Int: String] {
-        var out: [Int: String] = [:]
-        for slot in 1...6 {
-            let key = "SWITCH_DISPATCHER_HOTKEY_\(slot)"
-            guard let raw = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-                continue
-            }
-            out[slot] = raw
-        }
-        return out
     }
 
     private static func parseConvenienceDispatchers(_ raw: String?) -> [DirectoryItem] {

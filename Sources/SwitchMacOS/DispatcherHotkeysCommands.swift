@@ -8,27 +8,8 @@ import SwitchCore
 struct DispatcherHotkeysCommands: Commands {
     @ObservedObject var model: SwitchAppModel
 
-    private var defaultOCDispatcher: DirectoryItem? {
-        let dispatchers = model.directory?.dispatchers ?? []
-        return DispatcherHotkeyMonitor.defaultOCDispatcher(in: dispatchers)
-    }
-
     var body: some Commands {
-        CommandMenu("Dispatchers") {
-            ForEach(Array((model.directory?.dispatchers ?? []).prefix(4).enumerated()), id: \.offset) { idx, item in
-                Button("Select \(idx + 1): \(item.name)  \u{2318}\(idx + 1)") {
-                    model.directory?.selectDispatcher(item)
-                }
-            }
-
-            if let oc = defaultOCDispatcher {
-                Button("Select 5: \(oc.name)  \u{2318}5") {
-                    model.directory?.selectDispatcher(oc)
-                }
-            }
-
-            Divider()
-
+        CommandMenu("Sessions") {
             Button("Focus Oldest Waiting Session  \u{21e7}\u{2318}\u{2191}") {
                 _ = model.directory?.focusOldestWaitingSession()
             }
@@ -46,16 +27,6 @@ struct DispatcherHotkeysCommands: Commands {
 
 @MainActor
 final class DispatcherHotkeyMonitor {
-    // Physical key codes for the number row 1-6 (same on QWERTY, Dvorak, Programmer Dvorak, etc.)
-    private static let slotKeyCode: [UInt16: Int] = [
-        18: 1, // 1
-        19: 2, // 2
-        20: 3, // 3
-        21: 4, // 4
-        23: 5, // 5
-        22: 6, // 6
-    ]
-
     private var monitor: Any?
     private weak var model: SwitchAppModel?
 
@@ -74,11 +45,6 @@ final class DispatcherHotkeyMonitor {
             guard let self else { return event }
             let interesting: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
             let held = event.modifierFlags.intersection(interesting)
-
-            // Cmd+1..6: select dispatcher (5 targets default oc@ dispatcher).
-            if held == .command, let slot = Self.slotKeyCode[event.keyCode] {
-                return self.handleSlot(slot) ? nil : event
-            }
 
             // Shift+Up/Down: navigate sessions (skip when text field has content).
             if held == .shift, !Self.isEditingText {
@@ -112,62 +78,6 @@ final class DispatcherHotkeyMonitor {
     func uninstall() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
-    }
-
-    /// Select the Nth dispatcher in display order (Cmd+1 = first, etc.).
-    /// Cmd+5 targets the preferred oc@ dispatcher if available.
-    private func handleSlot(_ slot: Int) -> Bool {
-        guard let directory = model?.directory else {
-            NSSound.beep()
-            return true
-        }
-
-        if let configuredTarget = model?.config?.switchDispatcherHotkeyTargets[slot] {
-            if let matched = Self.dispatcherMatching(configuredTarget, in: directory.dispatchers) {
-                directory.selectDispatcher(matched)
-                return true
-            }
-            NSSound.beep()
-            return true
-        }
-
-        if slot == 5 {
-            if let oc = Self.defaultOCDispatcher(in: directory.dispatchers) {
-                directory.selectDispatcher(oc)
-                return true
-            }
-            NSSound.beep()
-            return true
-        }
-
-        let index = slot - 1
-        guard index >= 0, index < directory.dispatchers.count else {
-            NSSound.beep()
-            return true
-        }
-
-        directory.selectDispatcher(directory.dispatchers[index])
-        return true
-    }
-
-    static func defaultOCDispatcher(in dispatchers: [DirectoryItem]) -> DirectoryItem? {
-        dispatchers.first { $0.jid.lowercased().hasPrefix("oc@") }
-            ?? dispatchers.first { $0.name.lowercased().contains("opencode") }
-            ?? dispatchers.first { $0.name.lowercased() == "oc" }
-    }
-
-    static func dispatcherMatching(_ target: String, in dispatchers: [DirectoryItem]) -> DirectoryItem? {
-        let needle = target.lowercased()
-
-        if let exact = dispatchers.first(where: { $0.jid.lowercased() == needle }) {
-            return exact
-        }
-
-        if let byJidPrefix = dispatchers.first(where: { $0.jid.lowercased().hasPrefix(needle) }) {
-            return byJidPrefix
-        }
-
-        return dispatchers.first(where: { $0.name.lowercased().hasPrefix(needle) })
     }
 
     /// Only defer to the text field when it actually has text (so Shift+Arrow

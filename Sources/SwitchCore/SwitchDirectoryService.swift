@@ -75,6 +75,10 @@ public final class SwitchDirectoryService: ObservableObject {
     // Dispatchers that are "direct" (no sessions, e.g. external bridges).
     private var directDispatchers: Set<String> = []
 
+    // Last-used timestamps so the dispatcher strip shows recently used first.
+    // Persisted across launches; dispatchers never used keep server order.
+    private var lastUsedByDispatcher: [String: Date] = [:]
+
     /// Pubsub node for the selected dispatcher's legacy individuals group.
     private var selectedIndividualsPubSubNode: String? = nil
 
@@ -103,6 +107,7 @@ public final class SwitchDirectoryService: ObservableObject {
         self.xmppDomain = userBare.domain
         self.historyPrefetchLimit = Self.envInt("SWITCH_PREFETCH_HISTORY_THREADS", defaultValue: 0, min: 0, max: 50)
         self.recencyProbeLimit = Self.envInt("SWITCH_RECENCY_PROBE_THREADS", defaultValue: 5000, min: 0, max: 5000)
+        self.lastUsedByDispatcher = Self.loadDispatcherLastUsed()
         bindPubSubRefresh()
     }
 
@@ -120,6 +125,8 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     public func selectDispatcher(_ item: DirectoryItem) {
+        bumpDispatcherRecency(item.jid)
+
         // Clicking the currently-selected dispatcher should not re-fetch sessions.
         // Treat it as a focus action that switches the chat target back to the dispatcher.
         if selectedDispatcherJid == item.jid {
@@ -475,7 +482,7 @@ public final class SwitchDirectoryService: ObservableObject {
         ensureSubscribed(to: node)
         queryItems(node: node) { [weak self] items in
             guard let self else { return }
-            self.dispatchers = self.mergedDispatchersWithConvenienceContacts(items)
+            self.dispatchers = self.sortDispatchersByRecency(self.mergedDispatchersWithConvenienceContacts(items))
             self.dispatchersLoaded = true
 
             // If nothing is selected yet, pick the first dispatcher and load sessions.
@@ -772,6 +779,41 @@ public final class SwitchDirectoryService: ObservableObject {
 
     private static func bareJidsMatch(_ a: String, _ b: String) -> Bool {
         bareJid(a).caseInsensitiveCompare(bareJid(b)) == .orderedSame
+    }
+
+    // MARK: - Dispatcher recency
+
+    private static let dispatcherLastUsedKey = "SwitchDispatcherLastUsed"
+
+    private static func loadDispatcherLastUsed() -> [String: Date] {
+        let raw = UserDefaults.standard.dictionary(forKey: dispatcherLastUsedKey) as? [String: TimeInterval] ?? [:]
+        return raw.mapValues { Date(timeIntervalSince1970: $0) }
+    }
+
+    private func bumpDispatcherRecency(_ jid: String) {
+        lastUsedByDispatcher[Self.bareJid(jid)] = Date()
+        UserDefaults.standard.set(
+            lastUsedByDispatcher.mapValues { $0.timeIntervalSince1970 },
+            forKey: Self.dispatcherLastUsedKey
+        )
+        let sorted = sortDispatchersByRecency(dispatchers)
+        if sorted != dispatchers {
+            dispatchers = sorted
+        }
+    }
+
+    private func sortDispatchersByRecency(_ items: [DirectoryItem]) -> [DirectoryItem] {
+        items.sorted { a, b in
+            let aTime = lastUsedByDispatcher[Self.bareJid(a.jid)] ?? .distantPast
+            let bTime = lastUsedByDispatcher[Self.bareJid(b.jid)] ?? .distantPast
+            if aTime != bTime {
+                return aTime > bTime
+            }
+            if a.sortOrder != b.sortOrder {
+                return a.sortOrder < b.sortOrder
+            }
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
     }
 
     // MARK: - Sorting
