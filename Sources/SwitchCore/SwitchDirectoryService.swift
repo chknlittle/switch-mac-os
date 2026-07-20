@@ -125,8 +125,6 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     public func selectDispatcher(_ item: DirectoryItem) {
-        bumpDispatcherRecency(item.jid)
-
         // Clicking the currently-selected dispatcher should not re-fetch sessions.
         // Treat it as a focus action that switches the chat target back to the dispatcher.
         if selectedDispatcherJid == item.jid {
@@ -715,6 +713,16 @@ public final class SwitchDirectoryService: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Dispatcher recency: only real message traffic counts as usage
+        // (live publishers exclude archived/MAM history replay).
+        xmpp.chatStore.liveIncomingMessage
+            .merge(with: xmpp.chatStore.liveOutgoingMessage)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] msg in
+                self?.noteDispatcherUsage(threadJid: msg.threadJid, at: msg.timestamp)
+            }
+            .store(in: &cancellables)
+
         // Re-sort sessions and dispatchers when new messages arrive
         // Re-sort only when activity changed for a currently-visible session.
         xmpp.chatStore.activityUpdatedThread
@@ -790,8 +798,22 @@ public final class SwitchDirectoryService: ObservableObject {
         return raw.mapValues { Date(timeIntervalSince1970: $0) }
     }
 
-    private func bumpDispatcherRecency(_ jid: String) {
-        lastUsedByDispatcher[Self.bareJid(jid)] = Date()
+    /// Record that a dispatcher (or one of its sessions) exchanged a message.
+    /// Selection alone deliberately does not count as usage.
+    private func noteDispatcherUsage(threadJid: String, at timestamp: Date) {
+        let dispatcherJid = dispatchers.first(where: { Self.bareJidsMatch($0.jid, threadJid) })?.jid
+            ?? dispatcherForSession(threadJid)
+        guard let dispatcherJid else { return }
+        bumpDispatcherRecency(dispatcherJid, at: timestamp)
+    }
+
+    private func bumpDispatcherRecency(_ jid: String, at timestamp: Date) {
+        let key = Self.bareJid(jid)
+        // Skip regressions, and throttle the streams of session tool updates.
+        if let existing = lastUsedByDispatcher[key], timestamp.timeIntervalSince(existing) < 5 {
+            return
+        }
+        lastUsedByDispatcher[key] = timestamp
         UserDefaults.standard.set(
             lastUsedByDispatcher.mapValues { $0.timeIntervalSince1970 },
             forKey: Self.dispatcherLastUsedKey
