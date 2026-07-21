@@ -947,13 +947,27 @@ private struct ChatPane: View {
     private let bottomAnchorId: String = "__bottom__"
     private let composerMinHeight: CGFloat = 28
     private let composerMaxHeight: CGFloat = 160
+    // Long sessions accumulate thousands of messages; rendering them all makes
+    // every ForEach diff and scroll-to-bottom O(thread length). Show a recent
+    // window and let the user page older history in explicitly.
+    private static let initialVisibleMessageLimit = 250
+    private static let visibleMessagesStep = 500
+    @State private var visibleMessageLimit: Int = ChatPane.initialVisibleMessageLimit
     @State private var composerHeight: CGFloat = 28
     @State private var scrollTask: Task<Void, Never>? = nil
     @State private var isDropTarget: Bool = false
     @State private var isTranscriptMode: Bool = false
 
     var body: some View {
-        let messagesById = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, $0) })
+        let visibleMessages = messages.count > visibleMessageLimit
+            ? Array(messages.suffix(visibleMessageLimit))
+            : messages
+        // Replies are rare; only index the messages that are actually
+        // referenced instead of hashing every id on each body pass.
+        let repliedIds = Set(visibleMessages.compactMap { $0.replyTo?.id })
+        let messagesById: [String: ChatMessage] = repliedIds.isEmpty
+            ? [:]
+            : Dictionary(uniqueKeysWithValues: messages.filter { repliedIds.contains($0.id) }.map { ($0.id, $0) })
 
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 10) {
@@ -1024,11 +1038,21 @@ private struct ChatPane: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
-                                ForEach(Array(messages.enumerated()), id: \.element.id) { index, msg in
+                                if messages.count > visibleMessages.count {
+                                    Button("Show earlier messages (\(messages.count - visibleMessages.count) more)") {
+                                        visibleMessageLimit += Self.visibleMessagesStep
+                                    }
+                                    .buttonStyle(.plain)
+                                    .font(.system(size: 11.5, weight: .medium))
+                                    .foregroundStyle(Color.accentColor)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                }
+                                ForEach(Array(visibleMessages.enumerated()), id: \.element.id) { index, msg in
                                     MessageRow(
                                         msg: msg,
                                         repliedMessage: msg.replyTo.flatMap { messagesById[$0.id] },
-                                        showTimestamp: shouldShowTimestamp(for: index),
+                                        showTimestamp: shouldShowTimestamp(for: index, in: visibleMessages),
                                         dispatchers: dispatchers,
                                         selectedDispatcherJid: selectedDispatcherJid,
                                         xmpp: xmpp,
@@ -1039,6 +1063,7 @@ private struct ChatPane: View {
                                             onForwardToDispatcher(tapped, dispatcherJid)
                                         }
                                     )
+                                        .equatable()
                                         .id(msg.id)
                                 }
                                 Color.clear
@@ -1061,6 +1086,7 @@ private struct ChatPane: View {
                         // doesn't carry over scroll position.
                         .id(threadJid ?? "__no_thread__")
                         .task(id: threadJid) {
+                            visibleMessageLimit = Self.initialVisibleMessageLimit
                             scrollToBottom(using: proxy)
                         }
                         .onChange(of: messages.last?.id) { _ in
@@ -1302,12 +1328,12 @@ private struct ChatPane: View {
         return parts.joined(separator: "\n\n")
     }
 
-    private func shouldShowTimestamp(for index: Int) -> Bool {
-        guard messages.indices.contains(index) else { return false }
-        guard index < messages.count - 1 else { return true }
+    private func shouldShowTimestamp(for index: Int, in visible: [ChatMessage]) -> Bool {
+        guard visible.indices.contains(index) else { return false }
+        guard index < visible.count - 1 else { return true }
 
-        let current = messages[index]
-        let next = messages[index + 1]
+        let current = visible[index]
+        let next = visible[index + 1]
 
         if current.direction != next.direction {
             return true
@@ -1317,7 +1343,7 @@ private struct ChatPane: View {
         return gap >= 5 * 60
     }
 
-    private struct MessageRow: View {
+    private struct MessageRow: View, Equatable {
         let msg: ChatMessage
         let repliedMessage: ChatMessage?
         let showTimestamp: Bool
@@ -1327,13 +1353,24 @@ private struct ChatPane: View {
         let onReply: (ChatMessage) -> Void
         let onForward: (ChatMessage, String) -> Void
 
+        // Skip body re-evaluation unless displayed data changed; the closures
+        // route to stable bindings and xmpp is a long-lived reference, so
+        // neither participates in display equality.
+        static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
+            lhs.msg == rhs.msg
+                && lhs.repliedMessage == rhs.repliedMessage
+                && lhs.showTimestamp == rhs.showTimestamp
+                && lhs.selectedDispatcherJid == rhs.selectedDispatcherJid
+                && lhs.dispatchers == rhs.dispatchers
+        }
+
         private var isToolMessage: Bool {
             msg.meta?.isToolRelated ?? false
         }
 
         var body: some View {
-            let inferredImageAttachments = inferredInlineImageAttachments(from: msg.body)
-            let inferredPreviewURL = inferredLinkPreviewURL(from: msg.body)
+            let inferredImageAttachments = shouldScanBodyForLinks ? inferredInlineImageAttachments(from: msg.body) : []
+            let inferredPreviewURL = shouldScanBodyForLinks ? inferredLinkPreviewURL(from: msg.body) : nil
 
             HStack {
                 if msg.direction == .outgoing {
@@ -1520,10 +1557,27 @@ private struct ChatPane: View {
                 .frame(maxWidth: 520, alignment: .leading)
         }
 
+        // NSDataDetector/NSRegularExpression are expensive to construct and
+        // thread-safe to share; building them per body evaluation stalls the
+        // transcript on every UI update.
+        private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        private static let aesgcmUrlRegex = try? NSRegularExpression(pattern: "aesgcm://[^\\s]+#[0-9A-Fa-f]{88}")
+
+        /// Link scanning is O(body) per evaluation — skip it when the message
+        /// already renders as question/attachment, has no URL at all, or is a
+        /// huge paste (which renders via the plain-text fallback anyway).
+        private static let linkScanBudgetUTF16 = 10_000
+
+        private var shouldScanBodyForLinks: Bool {
+            if msg.direction == .incoming, msg.meta?.type == .question, msg.meta?.question != nil { return false }
+            if msg.meta?.type == .attachment, let atts = msg.meta?.attachments, !atts.isEmpty { return false }
+            if msg.body.utf16.count > Self.linkScanBudgetUTF16 { return false }
+            return msg.body.contains("://")
+        }
+
         private func inferredInlineImageAttachments(from body: String) -> [SwitchAttachment] {
-            let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
             let range = NSRange(body.startIndex..., in: body)
-            let matches = detector?.matches(in: body, options: [], range: range) ?? []
+            let matches = Self.linkDetector?.matches(in: body, options: [], range: range) ?? []
 
             var attachments: [SwitchAttachment] = []
             var seenUrls: Set<String> = []
@@ -1584,9 +1638,8 @@ private struct ChatPane: View {
         }
 
         private func inferredLinkPreviewURL(from body: String) -> URL? {
-            let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
             let range = NSRange(body.startIndex..., in: body)
-            let matches = detector?.matches(in: body, options: [], range: range) ?? []
+            let matches = Self.linkDetector?.matches(in: body, options: [], range: range) ?? []
 
             for match in matches {
                 guard let url = match.url else { continue }
@@ -1608,7 +1661,7 @@ private struct ChatPane: View {
         }
 
         private func extractAESGCMUrls(from text: String) -> [String] {
-            guard let regex = try? NSRegularExpression(pattern: "aesgcm://[^\\s]+#[0-9A-Fa-f]{88}") else {
+            guard let regex = Self.aesgcmUrlRegex else {
                 return []
             }
             let range = NSRange(text.startIndex..., in: text)
