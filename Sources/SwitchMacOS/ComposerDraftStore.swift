@@ -56,9 +56,15 @@ final class ComposerDraftStore {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
     }
 
+    /// Oversized drafts (huge pastes) stay in memory for thread switching but
+    /// are not persisted — serializing megabytes into UserDefaults on every
+    /// typing pause causes main-thread hitches.
+    private let maxPersistedDraftUTF16 = 65_536
+
     private func saveNow() {
         do {
-            let data = try JSONEncoder().encode(draftsByJid)
+            let persistable = draftsByJid.filter { $0.value.utf16.count <= maxPersistedDraftUTF16 }
+            let data = try JSONEncoder().encode(persistable)
             defaults.set(data, forKey: defaultsKey)
         } catch {
             // Best-effort; drafts are non-critical.

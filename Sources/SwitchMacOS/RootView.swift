@@ -2739,6 +2739,7 @@ private struct ComposerTextView: NSViewRepresentable {
 
         scrollView.documentView = textView
         context.coordinator.textView = textView
+        context.coordinator.lastSyncedText = text
         context.coordinator.updateHeightIfNeeded()
         return scrollView
     }
@@ -2752,8 +2753,12 @@ private struct ComposerTextView: NSViewRepresentable {
         textView.onPasteImage = onPasteImage
         textView.onPasteFileUrls = onPasteFileUrls
 
-        if textView.string != text {
+        // Compare against the coordinator's cached copy instead of bridging
+        // textView.string on every update pass; when the change originated in
+        // the text view the strings share storage and the compare is O(1).
+        if text != context.coordinator.lastSyncedText {
             textView.string = text
+            context.coordinator.lastSyncedText = text
         }
 
         context.coordinator.parent = self
@@ -2764,6 +2769,11 @@ private struct ComposerTextView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ComposerTextView
         weak var textView: NSTextView?
+        var lastSyncedText: String = ""
+
+        /// Text longer than this is guaranteed to wrap past maxHeight at any
+        /// realistic composer width, so skip measuring entirely.
+        private static let measurementLimitUTF16 = 4_096
 
         init(_ parent: ComposerTextView) {
             self.parent = parent
@@ -2771,7 +2781,9 @@ private struct ComposerTextView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
-            parent.text = tv.string
+            let s = tv.string
+            lastSyncedText = s
+            parent.text = s
             updateHeightIfNeeded()
         }
 
@@ -2781,19 +2793,81 @@ private struct ComposerTextView: NSViewRepresentable {
 
         func updateHeightIfNeeded() {
             guard let tv = textView else { return }
+
+            // Forcing layout of a huge paste (e.g. browser console logs) blocks
+            // the main thread; anything this long exceeds maxHeight regardless.
+            if (tv.textStorage?.length ?? 0) > Self.measurementLimitUTF16 {
+                setMeasuredHeight(parent.maxHeight)
+                return
+            }
+
             guard let container = tv.textContainer, let layout = tv.layoutManager else { return }
 
             layout.ensureLayout(for: container)
             let used = layout.usedRect(for: container)
             let rawHeight = used.height + tv.textContainerInset.height * 2
 
-            let clamped = min(max(rawHeight, parent.minHeight), parent.maxHeight)
+            setMeasuredHeight(min(max(rawHeight, parent.minHeight), parent.maxHeight))
+        }
+
+        private func setMeasuredHeight(_ clamped: CGFloat) {
             if abs(parent.measuredHeight - clamped) > 0.5 {
                 DispatchQueue.main.async {
                     self.parent.measuredHeight = clamped
                 }
             }
         }
+    }
+}
+
+/// Fallback renderer for messages too large for the markdown pipeline:
+/// collapsed monospaced preview with an explicit expand toggle, so a pasted
+/// console log doesn't stall layout for the whole transcript.
+private struct LargeMessagePlainText: View {
+    let content: String
+    @State private var expanded = false
+
+    private static let previewLineLimit = 30
+    private static let previewCharLimit = 2_000
+
+    var body: some View {
+        let preview = expanded ? content : Self.preview(of: content)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(preview)
+                .font(.system(size: 12.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if preview.utf16.count < content.utf16.count || expanded {
+                Button {
+                    expanded.toggle()
+                } label: {
+                    Text(expanded ? "Show less" : "Show full message (\(Self.sizeLabel(content)))")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+            }
+        }
+    }
+
+    private static func preview(of s: String) -> String {
+        var out = s.split(separator: "\n", omittingEmptySubsequences: false)
+            .prefix(previewLineLimit)
+            .joined(separator: "\n")
+        if out.utf16.count > previewCharLimit {
+            out = String(out.prefix(previewCharLimit)) + "…"
+        }
+        return out
+    }
+
+    private static func sizeLabel(_ s: String) -> String {
+        let lines = s.reduce(into: 1) { if $1 == "\n" { $0 += 1 } }
+        if lines > 1 {
+            return "\(lines) lines"
+        }
+        return "\(s.count) chars"
     }
 }
 
@@ -2805,9 +2879,21 @@ private struct MarkdownMessage: View, Equatable {
     // into SwiftUI (NSTextTable is not representable in Text).
     let xhtmlBody: String?
 
+    /// Above this size the markdown pipeline (per-line AttributedString
+    /// concatenation + one giant SwiftUI Text) blocks the main thread for
+    /// seconds, so huge messages (pasted logs, dumps) fall back to plain text.
+    private static let markdownBudgetUTF16 = 10_000
+
     var body: some View {
         let normalized = normalize(content)
+        if normalized.utf16.count > Self.markdownBudgetUTF16 {
+            LargeMessagePlainText(content: normalized)
+        } else {
+            markdownBody(normalized)
+        }
+    }
 
+    private func markdownBody(_ normalized: String) -> some View {
         // Render as a single Text view so selection can span paragraphs and code blocks.
         // SwiftUI text selection does not extend across multiple Text views.
         let blocks = parseMarkdownBlocks(normalized)
