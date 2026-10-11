@@ -648,39 +648,37 @@ private struct SidebarRow: View {
                 }
             }
             Spacer(minLength: 0)
-            if isHovering {
-                if !isComposing, let onResume {
-                    Button(action: onResume) {
-                        Image(systemName: "arrow.forward.circle")
-                            .font(.system(size: 12))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Resume in new session")
-                }
-                if let onCopyName {
-                    Button(action: onCopyName) {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 11))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Copy session name")
-                }
-            }
             if isComposing {
                 ProgressView()
                     .scaleEffect(0.5)
                     .frame(width: 16, height: 16)
-                if let onCancel {
-                    Button(action: onCancel) {
-                        Image(systemName: "stop.circle")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Send /cancel")
+            }
+            if isHovering, let onCopyName {
+                Button(action: onCopyName) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 11))
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Copy session name")
+            }
+            if isHovering, !isComposing, let onResume {
+                Button(action: onResume) {
+                    Image(systemName: "arrow.forward.circle")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Resume in new session")
+            }
+            if isComposing, let onCancel {
+                Button(action: onCancel) {
+                    Image(systemName: "stop.circle")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Send /cancel")
             }
             if unreadCount > 0 {
                 UnreadBadge(count: unreadCount)
