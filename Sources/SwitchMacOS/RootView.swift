@@ -648,20 +648,6 @@ private struct SidebarRow: View {
                 }
             }
             Spacer(minLength: 0)
-            if isComposing {
-                ProgressView()
-                    .scaleEffect(0.5)
-                    .frame(width: 16, height: 16)
-                if let onCancel {
-                    Button(action: onCancel) {
-                        Image(systemName: "stop.circle")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Send /cancel")
-                }
-            }
             if isHovering {
                 if !isComposing, let onResume {
                     Button(action: onResume) {
@@ -680,6 +666,20 @@ private struct SidebarRow: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .help("Copy session name")
+                }
+            }
+            if isComposing {
+                ProgressView()
+                    .scaleEffect(0.5)
+                    .frame(width: 16, height: 16)
+                if let onCancel {
+                    Button(action: onCancel) {
+                        Image(systemName: "stop.circle")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Send /cancel")
                 }
             }
             if unreadCount > 0 {
