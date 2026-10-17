@@ -51,6 +51,7 @@ private struct DirectoryShellView: View {
                 selectedDispatcherJid: directory.selectedDispatcherJid,
                 xmpp: xmpp,
                 composerText: $composerText,
+                composerPlaceholder: composerPlaceholder,
                 pendingImage: $pendingImage,
                 pendingReply: $pendingReply,
                 onSend: {
@@ -131,6 +132,13 @@ private struct DirectoryShellView: View {
         case .subagent(let jid):
             return "Subagent: \(jid)"
         }
+    }
+
+    private var composerPlaceholder: String {
+        if case .dispatcher = directory.chatTarget, let project = directory.pendingProject {
+            return "New #\(project) session"
+        }
+        return "Message"
     }
 
     private var sessionHeaderPrompt: String? {
@@ -225,6 +233,7 @@ private struct SidebarList: View {
     @State private var bottomMarkerMinY: CGFloat = 0
     @State private var stickToBottom: Bool = true
     @State private var didInitialScroll: Bool = false
+    @AppStorage("SwitchCollapsedProjects") private var collapsedProjectsRaw: String = ""
 
     private var selectedDispatcherName: String? {
         guard let dispatcherJid = directory.selectedDispatcherJid else { return nil }
@@ -246,8 +255,9 @@ private struct SidebarList: View {
                                     if !directory.individuals.isEmpty {
                                         // directory.individuals is sorted: active (by recency) then closed.
                                         // Reversed so oldest-active at top, newest-active at bottom.
-                                        // Closed sessions appear at the very top.
-                                        let reversed = Array(directory.individuals.reversed())
+                                        // Closed sessions appear at the very top. Project sessions
+                                        // live in folders below the loose ones.
+                                        let reversed = Array(directory.individuals.reversed()).filter { !isInProjectFolder($0) }
                                         let closedItems = reversed.filter { $0.isClosed }
                                         let activeItems = reversed.filter { !$0.isClosed }
 
@@ -283,6 +293,12 @@ private struct SidebarList: View {
                                         .padding(.horizontal, 10)
                                         .transaction { txn in
                                             txn.animation = nil
+                                        }
+                                    }
+
+                                    if !directory.selectedDispatcherIsDirect {
+                                        ForEach(directory.projects, id: \.self) { name in
+                                            projectFolder(name)
                                         }
                                     }
 
@@ -432,6 +448,42 @@ private struct SidebarList: View {
             }
         }
         .background(TintedSurface(base: Theme.windowBg, tint: Theme.accent, opacity: 0.055))
+    }
+
+    private func isInProjectFolder(_ item: DirectoryItem) -> Bool {
+        guard let project = item.project else { return false }
+        return directory.projects.contains(project)
+    }
+
+    private func toggleCollapsed(_ project: String) {
+        var names = Set(collapsedProjectsRaw.split(separator: ",").map(String.init))
+        if names.contains(project) { names.remove(project) } else { names.insert(project) }
+        collapsedProjectsRaw = names.sorted().joined(separator: ",")
+    }
+
+    /// Collapsible folder of one project's sessions (oldest top, newest bottom).
+    @ViewBuilder
+    private func projectFolder(_ project: String) -> some View {
+        let items = directory.individuals.reversed().filter { $0.project == project }
+        let isCollapsed = collapsedProjectsRaw.split(separator: ",").contains(Substring(project))
+        ProjectFolderHeader(
+            title: "#\(project)",
+            count: items.count,
+            isCollapsed: isCollapsed,
+            isPending: directory.pendingProject == project,
+            onToggle: { toggleCollapsed(project) },
+            onNewSession: { directory.startSession(inProject: project) }
+        )
+        .padding(.horizontal, 10)
+        .padding(.top, 4)
+
+        if !isCollapsed {
+            ForEach(items) { item in
+                sessionRow(item)
+                    .opacity(item.isClosed ? 0.6 : 1)
+                    .padding(.leading, 12)
+            }
+        }
     }
 
     /// Fixed section at the very top of the sidebar listing sessions with
@@ -607,6 +659,48 @@ private struct SidebarSectionHeader: View {
         }
         .padding(.top, 4)
         .padding(.bottom, 4)
+    }
+}
+
+private struct ProjectFolderHeader: View {
+    let title: String
+    let count: Int
+    let isCollapsed: Bool
+    let isPending: Bool
+    let onToggle: () -> Void
+    let onNewSession: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 12)
+            Text(title)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+            Text("\(count)")
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            if isHovering || isPending {
+                Button(action: onNewSession) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isPending ? Color.accentColor : Color.secondary)
+                .help("New session in \(title)")
+            }
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .contentShape(Rectangle())
+        .onTapGesture { onToggle() }
+        .onHover { isHovering = $0 }
+        .background(isPending ? Theme.selectedRow : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
 
@@ -1006,6 +1100,7 @@ private struct ChatPane: View {
     let selectedDispatcherJid: String?
     let xmpp: XMPPService
     @Binding var composerText: String
+    let composerPlaceholder: String
     @Binding var pendingImage: PendingImageAttachment?
     @Binding var pendingReply: PendingReplyTarget?
     let onSend: () -> Void
@@ -1203,7 +1298,7 @@ private struct ChatPane: View {
                         )
 
                         if composerText.isEmpty {
-                            Text("Message")
+                            Text(composerPlaceholder)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 7)

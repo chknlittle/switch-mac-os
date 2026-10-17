@@ -10,10 +10,10 @@ MACOS="${CONTENTS}/MacOS"
 RESOURCES="${CONTENTS}/Resources"
 ENTITLEMENTS="${REPO_ROOT}/SwitchMacOS.entitlements"
 
-INSTALL_TO_APPLICATIONS=0
+INSTALL_TO_APPLICATIONS=1
 for arg in "$@"; do
-  if [ "$arg" = "--install" ]; then
-    INSTALL_TO_APPLICATIONS=1
+  if [ "$arg" = "--no-install" ]; then
+    INSTALL_TO_APPLICATIONS=0
   fi
 done
 
@@ -78,9 +78,14 @@ PLIST
 codesign --force --deep --sign - --entitlements "${ENTITLEMENTS}" "${BUNDLE_DIR}"
 
 if [ "$INSTALL_TO_APPLICATIONS" -eq 1 ]; then
-  ln -sfh "${REPO_ROOT}/${BUNDLE_DIR}" "/Applications/${APP_NAME}.app"
-  echo "Built and signed ${BUNDLE_DIR} (symlinked to /Applications)"
+  INSTALLED="/Applications/${APP_NAME}.app"
+  # A real (copied) app there would shadow the symlink: ln would put the
+  # link inside it, and Spotlight/Launchpad would keep opening the old build.
+  if [ -e "${INSTALLED}" ] && [ ! -L "${INSTALLED}" ]; then
+    rm -rf "${INSTALLED}"
+  fi
+  ln -sfh "${REPO_ROOT}/${BUNDLE_DIR}" "${INSTALLED}"
+  echo "Built and signed ${BUNDLE_DIR} (symlinked to ${INSTALLED})"
 else
   echo "Built and signed ${BUNDLE_DIR}"
-  echo "Tip: ./bundle.sh --install to symlink into /Applications"
 fi

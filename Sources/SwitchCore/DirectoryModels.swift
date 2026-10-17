@@ -14,6 +14,8 @@ public struct DirectoryItem: Identifiable, Hashable, Sendable {
     public let isGroup: Bool
     /// True when this session has an active (running) Ralph loop.
     public let isRalphLoop: Bool
+    /// Switch project this session belongs to (from the `project=<name>` node tag).
+    public let project: String?
     /// Legacy pubsub group localpart (`sessions-<key>`) for individuals notifications.
     public let individualsPubSubGroupLocal: String?
 
@@ -25,6 +27,7 @@ public struct DirectoryItem: Identifiable, Hashable, Sendable {
         isClosed: Bool = false,
         isGroup: Bool = false,
         isRalphLoop: Bool = false,
+        project: String? = nil,
         individualsPubSubGroupLocal: String? = nil
     ) {
         self.jid = jid
@@ -35,6 +38,7 @@ public struct DirectoryItem: Identifiable, Hashable, Sendable {
         self.isClosed = isClosed
         self.isGroup = isGroup
         self.isRalphLoop = isRalphLoop
+        self.project = project
         self.individualsPubSubGroupLocal = individualsPubSubGroupLocal
     }
 }
@@ -63,6 +67,7 @@ public extension ChatTarget {
 
 public struct SwitchDirectoryNodes: Sendable {
     public var dispatchers: String = "dispatchers"
+    public var projects: String = "projects"
     /// Direct dispatcher→sessions node (skips groups indirection).
     public var sessions: @Sendable (String) -> String = { dispatcherJid in "sessions:\(dispatcherJid)" }
     // Legacy nodes (kept for reference but no longer queried by default).

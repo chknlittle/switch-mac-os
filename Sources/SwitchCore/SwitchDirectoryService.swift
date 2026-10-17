@@ -8,6 +8,10 @@ public final class SwitchDirectoryService: ObservableObject {
     @Published public private(set) var individuals: [DirectoryItem] = []
     /// Sessions with an active Ralph loop, across all loaded dispatchers.
     @Published public private(set) var ralphSessions: [DirectoryItem] = []
+    /// Switch projects (memory folders with a `.project` marker).
+    @Published public private(set) var projects: [String] = []
+    /// Project the next dispatcher prompt is tagged with (one-shot, set by `startSession(inProject:)`).
+    @Published public private(set) var pendingProject: String? = nil
 
     // UI state: used to distinguish "empty" from "still loading".
     @Published public private(set) var isLoadingIndividuals: Bool = false
@@ -20,6 +24,12 @@ public final class SwitchDirectoryService: ObservableObject {
     /// Tracks which sessions belong to which dispatcher (dispatcher JID -> session JIDs)
     private var dispatcherToSessions: [String: Set<String>] = [:]
     private var sessionToDispatcher: [String: String] = [:]
+
+    /// True when the selected dispatcher has no sessions (e.g. an external bridge).
+    public var selectedDispatcherIsDirect: Bool {
+        guard let jid = selectedDispatcherJid else { return false }
+        return directDispatchers.contains(jid)
+    }
 
     /// Returns dispatchers with at least one composing session.
     public var dispatchersWithComposingSessions: Set<String> {
@@ -125,6 +135,7 @@ public final class SwitchDirectoryService: ObservableObject {
     }
 
     public func refreshAll() {
+        refreshProjects()
         if !dispatchersLoaded {
             refreshDispatchers()
         }
@@ -141,6 +152,7 @@ public final class SwitchDirectoryService: ObservableObject {
         // Clicking the currently-selected dispatcher should not re-fetch sessions.
         // Treat it as a focus action that switches the chat target back to the dispatcher.
         if selectedDispatcherJid == item.jid {
+            pendingProject = nil
             selectedSessionJid = nil
             chatTarget = .dispatcher(item.jid)
             lastSelectedIndividualJid = nil
@@ -191,7 +203,23 @@ public final class SwitchDirectoryService: ObservableObject {
         refreshSessionsForDispatcher(dispatcherJid: item.jid)
     }
 
+    /// Focus the selected dispatcher's chat so the next prompt starts a session in `project`.
+    public func startSession(inProject project: String) {
+        guard let dispatcherJid = selectedDispatcherJid else { return }
+        pendingProject = project
+        selectedSessionJid = nil
+        chatTarget = .dispatcher(dispatcherJid)
+        lastSelectedIndividualJid = nil
+        clearAwaitingNewSession()
+        xmpp.ensureHistoryLoaded(with: dispatcherJid)
+    }
+
+    public func clearPendingProject() {
+        pendingProject = nil
+    }
+
     public func selectIndividual(_ item: DirectoryItem) {
+        pendingProject = nil
         clearAwaitingNewSession()
         selectedSessionJid = item.jid
         chatTarget = .individual(item.jid)
@@ -202,9 +230,21 @@ public final class SwitchDirectoryService: ObservableObject {
         xmpp.ensureHistoryLoaded(with: item.jid)
     }
 
+    /// Sessions in sidebar order: loose sessions, then each expanded project folder.
+    private func sidebarDisplayOrder() -> [DirectoryItem] {
+        let all = Array(individuals.reversed())
+        let collapsed = Set((UserDefaults.standard.string(forKey: "SwitchCollapsedProjects") ?? "")
+            .split(separator: ",").map(String.init))
+        var order = all.filter { item in item.project.map { !projects.contains($0) } ?? true }
+        for project in projects where !collapsed.contains(project) {
+            order += all.filter { $0.project == project }
+        }
+        return order
+    }
+
     /// Select the next session in display order (visually downward).
     public func selectNextSession() {
-        let displayOrder = individuals.reversed() as [DirectoryItem]
+        let displayOrder = sidebarDisplayOrder()
         guard !displayOrder.isEmpty else { return }
         guard let currentJid = selectedSessionJid,
               let currentIndex = displayOrder.firstIndex(where: { $0.jid == currentJid }) else {
@@ -219,7 +259,7 @@ public final class SwitchDirectoryService: ObservableObject {
 
     /// Select the previous session in display order (visually upward).
     public func selectPreviousSession() {
-        let displayOrder = individuals.reversed() as [DirectoryItem]
+        let displayOrder = sidebarDisplayOrder()
         guard !displayOrder.isEmpty else { return }
         guard let currentJid = selectedSessionJid,
               let currentIndex = displayOrder.firstIndex(where: { $0.jid == currentJid }) else {
@@ -266,7 +306,9 @@ public final class SwitchDirectoryService: ObservableObject {
             let taskId = UUID().uuidString
             let parent = lastSelectedIndividualJid ?? xmpp.client.userBareJid.stringValue
             xmpp.sendSubagentWork(to: jid, taskId: taskId, parentJid: parent, body: body)
-        case .dispatcher, .individual:
+        case .dispatcher:
+            xmpp.sendMessage(to: jid, body: withProjectPrefix(body), replyTo: replyTo)
+        case .individual:
             xmpp.sendMessage(to: jid, body: body, replyTo: replyTo)
         }
 
@@ -295,7 +337,7 @@ public final class SwitchDirectoryService: ObservableObject {
             xmpp.ensureHistoryLoaded(with: dispatcherJid)
         }
 
-        xmpp.sendMessage(to: dispatcherJid, body: trimmed)
+        xmpp.sendMessage(to: dispatcherJid, body: withProjectPrefix(trimmed))
 
         if !directDispatchers.contains(dispatcherJid) {
             ensureDispatcherPubSub(for: dispatcher)
@@ -488,6 +530,25 @@ public final class SwitchDirectoryService: ObservableObject {
 
     // MARK: - Dispatchers (fetched once, cached permanently)
 
+    /// Tag a dispatcher prompt with the pending project, unless the text
+    /// already names one (`#x`) or is a command (`/x`, `@x`).
+    private func withProjectPrefix(_ body: String) -> String {
+        guard let project = pendingProject, let first = body.first,
+              !"#/@".contains(first) else { return body }
+        pendingProject = nil
+        return "#\(project) \(body)"
+    }
+
+    private func refreshProjects() {
+        queryItems(node: nodes.projects) { [weak self] items in
+            guard let self else { return }
+            let names = items.map(\.name).sorted()
+            if names != self.projects {
+                self.projects = names
+            }
+        }
+    }
+
     private func refreshDispatchers() {
         let node = nodes.dispatchers
         ensureSubscribed(to: node)
@@ -633,6 +694,8 @@ public final class SwitchDirectoryService: ObservableObject {
                         let isDirect = nodeTags.contains("direct")
                         let isClosed = nodeTags.contains("closed")
                         let isRalphLoop = nodeTags.contains("ralph")
+                        let project = nodeTags.first { $0.hasPrefix("project=") }
+                            .map { String($0.dropFirst("project=".count)) }
                         let isGroup = nodeTags.contains("group") || nodeTags.contains("muc") || nodeTags.contains("room") || self.isLikelyGroupJid(item.jid.bareJid.stringValue)
                         let sortOrder = self.parseSortOrder(item.node)
 
@@ -644,6 +707,7 @@ public final class SwitchDirectoryService: ObservableObject {
                             isClosed: isClosed,
                             isGroup: isGroup,
                             isRalphLoop: isRalphLoop,
+                            project: project,
                             individualsPubSubGroupLocal: self.parseIndividualsGroupLocal(item.node)
                         )
                     }.sorted { $0.sortOrder < $1.sortOrder }

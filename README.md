@@ -117,6 +117,8 @@ swift build
 open .build/SwitchMacOS.app
 ```
 
+`bundle.sh` also symlinks the bundle into `/Applications/SwitchMacOS.app` (replacing any copied app there), so Spotlight and Launchpad open the fresh build. Pass `--no-install` to skip that.
+
 You can also pass env vars inline:
 
 ```bash
