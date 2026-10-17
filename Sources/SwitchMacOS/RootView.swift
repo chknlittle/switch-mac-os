@@ -297,7 +297,7 @@ private struct SidebarList: View {
                                     }
 
                                     if !directory.selectedDispatcherIsDirect {
-                                        ForEach(directory.projects, id: \.self) { name in
+                                        ForEach(directory.projectsInSidebarOrder, id: \.self) { name in
                                             projectFolder(name)
                                         }
                                     }

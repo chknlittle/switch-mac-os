@@ -25,6 +25,19 @@ public final class SwitchDirectoryService: ObservableObject {
     private var dispatcherToSessions: [String: Set<String>] = [:]
     private var sessionToDispatcher: [String: String] = [:]
 
+    /// Projects in sidebar order: the one with the most active sessions sits at
+    /// the bottom, next to the composer.
+    public var projectsInSidebarOrder: [String] {
+        var active: [String: Int] = [:]
+        for item in individuals where !item.isClosed {
+            if let project = item.project { active[project, default: 0] += 1 }
+        }
+        return projects.sorted {
+            let (a, b) = (active[$0] ?? 0, active[$1] ?? 0)
+            return a != b ? a < b : $0 < $1
+        }
+    }
+
     /// True when the selected dispatcher has no sessions (e.g. an external bridge).
     public var selectedDispatcherIsDirect: Bool {
         guard let jid = selectedDispatcherJid else { return false }
@@ -236,7 +249,7 @@ public final class SwitchDirectoryService: ObservableObject {
         let collapsed = Set((UserDefaults.standard.string(forKey: "SwitchCollapsedProjects") ?? "")
             .split(separator: ",").map(String.init))
         var order = all.filter { item in item.project.map { !projects.contains($0) } ?? true }
-        for project in projects where !collapsed.contains(project) {
+        for project in projectsInSidebarOrder where !collapsed.contains(project) {
             order += all.filter { $0.project == project }
         }
         return order
